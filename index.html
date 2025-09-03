@@ -57,7 +57,7 @@ COMMENT MODIFIER :
 
 // === CONFIGURATION À REMPLIR pour la duree d'acces au programme ===
 
-var validDays = 4;   // durée en jours, ici 4 jours
+var validDays = ;// durée en jours, si champ libre unlimité, ex = 4, 4 jours,=0 expiré
 
 // === CALCUL DATE EXPIRATION ===
 var now = new Date();
@@ -1321,80 +1321,83 @@ document.getElementById("closeBtn").onclick = () => {
   URL.revokeObjectURL(url);
 
   // 3) Écran final + ENTER pour fermer (SV/FR/EN)
-  const finalLang   = (["Svenska","Français","English"].includes(currentLang)) ? currentLang : "English";
-  const finalFolder = { Svenska: "Hämtade filer", Français: "Téléchargements", English: "Downloads" }[finalLang];
-  const finalTexts  = {
-    Svenska: {
-      screen: `Tack! Dina svar har sparats i mappen ${finalFolder}.<br><br>Du kan nu stänga fönstret.`,
-      hint:   'Tryck RETUR för att stänga fliken.',
-      block:  'Kunde inte stänga automatiskt. Tryck Ctrl+W (Cmd+W på Mac) eller Alt+F4.'
-    },
-    Français: {
-      screen: `Merci ! Vos réponses ont été enregistrées dans le dossier ${finalFolder}.<br><br>Vous pouvez maintenant fermer la fenêtre.`,
-      hint:   'Appuyez sur ENTRÉE pour fermer l’onglet.',
-      block:  'Fermeture automatique impossible. Appuyez sur Ctrl+W (Cmd+W sur Mac) ou Alt+F4.'
-    },
-    English: {
-      screen: `Thanks! Your answers have been saved in the ${finalFolder} folder.<br><br>You can now close this window.`,
-      hint:   'Press ENTER to close the tab.',
-      block:  'Auto-close blocked. Press Ctrl+W (Cmd+W on Mac) or Alt+F4.'
-    }
-  }[finalLang];
 
-  // Rendu de l’écran final
-  document.body.innerHTML = `
-    <div id="finalScreen" style="text-align:center; margin-top:50px; font-size:1.5em;">
-      ${finalTexts.screen}
-      <div id="closeHint" style="margin-top:16px; font-size:1rem; opacity:.8;">${finalTexts.hint}</div>
-    </div>
-  `;
-
-  // Tentative de fermeture
-  function attemptCloseOnce(){
-    try {
-      if (window.opener) { window.close(); return true; }
-      window.open('', '_self'); window.close();
-    } catch(_) {}
-    return false;
+const finalLang   = (["Svenska","Français","English"].includes(currentLang)) ? currentLang : "English";
+const finalFolder = { Svenska: "Hämtade filer", Français: "Téléchargements", English: "Downloads" }[finalLang];
+const finalTexts  = {
+  Svenska: {
+    screen: `Tack! Dina svar har sparats i mappen ${finalFolder}.<br><br>Du kan nu stänga fönstret.`,
+    hint:   'Tryck RETUR för att stänga fliken.',
+    block:  'Automatisk stängning blockerad. Tryck Ctrl+W (Cmd+W på Mac) eller Alt+F4.'
+  },
+  Français: {
+    screen: `Merci ! Vos réponses ont été enregistrées dans le dossier ${finalFolder}.<br><br>Vous pouvez maintenant fermer la fenêtre.`,
+    hint:   'Appuyez sur ENTRÉE pour fermer l’onglet.',
+    block:  'Fermeture auto bloquée. Appuyez sur Ctrl+W (Cmd+W sur Mac) ou Alt+F4.'
+  },
+  English: {
+    screen: `Thanks! Your answers have been saved in the ${finalFolder} folder.<br><br>You can now close this window.`,
+    hint:   'Press ENTER to close the tab.',
+    block:  'Auto-close blocked. Press Ctrl+W (Cmd+W on Mac) or Alt+F4.'
   }
+}[finalLang];
 
-  // ENTER / NUMPAD-ENTER
-  function onCloseKey(e){
+// Rendu de l’écran final
+document.body.innerHTML = `
+  <div id="finalScreen" style="text-align:center; margin-top:50px; font-size:1.5em;">
+    ${finalTexts.screen}
+    <div id="closeHint" style="margin-top:16px; font-size:1rem; opacity:.8;">${finalTexts.hint}</div>
+  </div>
+`;
+
+// Détection “ouvert par script” ou via lanceur (optionnel: ?spawned=1)
+const spawned = (() => {
+  try { return new URLSearchParams(location.search).get('spawned') === '1'; } catch(_) { return false; }
+})();
+
+// Tentative de fermeture
+function attemptCloseOnce(){
+  try {
+    // Cas OK: fenêtre enfant ouverte par script (ou marquée spawned)
+    if ((window.opener && !window.opener.closed) || spawned) { window.close(); return true; }
+    // Cas navigation interne: revenir en arrière
+    if (history.length > 1) { history.back(); return true; }
+    // Dernier essai (souvent bloqué)
+    window.open('', '_self'); window.close();
+  } catch(_) {}
+  return false;
+}
+
+// ENTER / NUMPAD-ENTER — feedback immédiat si bloqué
+function onCloseKey(e){
   const k = e.key;
   if (k !== 'Enter' && k !== 'NumpadEnter') return;
-  if (!document.getElementById('finalScreen')) return;
   e.preventDefault();
 
   const ok = attemptCloseOnce();
   if (!ok) {
     const hint = document.getElementById('closeHint');
     if (hint) {
-      hint.textContent =
-        finalLang === 'Svenska'  ? 'Automatisk stängning blockerad. Tryck Ctrl+W (Cmd+W på Mac) eller Alt+F4.' :
-        finalLang === 'Français' ? 'Fermeture auto bloquée. Appuyez sur Ctrl+W (Cmd+W sur Mac) ou Alt+F4.' :
-                                   'Auto-close blocked. Press Ctrl+W (Cmd+W on Mac) or Alt+F4.';
+      hint.textContent = finalTexts.block;
       hint.style.opacity = '1';
+      hint.style.fontWeight = '700';
     }
   }
-
-  document.removeEventListener('keydown', onCloseKey, true);
 }
+document.addEventListener('keydown', onCloseKey, { capture: true });
 
-  document.addEventListener('keydown', onCloseKey, { once: true, capture: true });
-
-  // Click pour tenter de fermer aussi
+// Click sur l’écran final: même logique (fermer ou afficher l’instruction)
 document.getElementById('finalScreen').addEventListener('click', () => {
-  if (!attemptCloseOnce()) {
+  const ok = attemptCloseOnce();
+  if (!ok) {
     const hint = document.getElementById('closeHint');
     if (hint) {
-      hint.textContent =
-        finalLang === 'Svenska'  ? 'Automatisk stängning blockerad. Tryck Ctrl+W (Cmd+W på Mac) eller Alt+F4.' :
-        finalLang === 'Français' ? 'Fermeture auto bloquée. Appuyez sur Ctrl+W (Cmd+W sur Mac) ou Alt+F4.' :
-                                   'Auto-close blocked. Press Ctrl+W (Cmd+W on Mac) or Alt+F4.';
+      hint.textContent = finalTexts.block;
       hint.style.opacity = '1';
+      hint.style.fontWeight = '700';
     }
   }
-}, { once: true });
+}, { once: false });
  
 }; // <-- FIN de closeBtn.onclick
 
