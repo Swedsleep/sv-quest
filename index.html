@@ -221,8 +221,27 @@ document.addEventListener("DOMContentLoaded", function(){
   if (VADMIN && String(VADMIN).toLowerCase() === ADMIN_CODE.toLowerCase()) ADMIN = true;
 
   // Si pas encore admin → demander le code
-  if (!ADMIN){
-    var ans = prompt("Entrez le code admin (tapez les premières lettres, ex. 'psy...') :");
+	if (!ADMIN){
+  // Prompt admin multilingue
+  var msgAdmin = {
+    "Français": "Entrez le code admin (tapez les premières lettres) :",
+    "English" : "Enter the admin code (type the first letters):",
+    "Svenska" : "Ange administratörskoden (skriv de första bokstäverna):"
+  }[window.currentLang] || "Enter admin code:";
+
+  var ans = prompt(msgAdmin);
+
+  // Version souple : l'entrée doit commencer par le code
+  if (ans && ADMIN_CODE.toLowerCase().startsWith(String(ans).toLowerCase())) {
+    ADMIN = true;
+    try{ localStorage.setItem(ADMIN_KEY, "1"); }catch(_){}
+    alert({
+      "Français":"Mode édition activé (illimité).",
+      "English":"Edit mode enabled (no expiry).",
+      "Svenska":"Redigeringsläge aktiverat (obegränsat)."
+    }[window.currentLang] || "Admin mode on");
+  }
+}
 
     // 💡 Version actuelle (souple) : il suffit que l'entrée COMMENCE par le code
     if (ans && ADMIN_CODE.toLowerCase().startsWith(String(ans).toLowerCase())) {
@@ -3327,4 +3346,5 @@ document.addEventListener('DOMContentLoaded', function(){
 
 </body>
 </html>
+
 
