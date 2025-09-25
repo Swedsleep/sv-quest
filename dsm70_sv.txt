@@ -1,0 +1,3329 @@
+﻿﻿<!DOCTYPE html>
+<!--
+====================================================================
+CONFIGURATION RAPIDE (à modifier en haut du fichier)
+- homeHeaderDefaultByLang : texte court dans la banderole AVANT le choix
+  (ex. 'Bienvenue' / 'Welcome' / 'Välkommen' OU 'Questionnaire' / 'Frågeformulär')
+- homeHeaderIntroLinesByLang : 2 lignes d’intro affichées dans la banderole (accueil)
+- availableLangsByForm : langues disponibles par ID de questionnaire (empêche "Continuer" si non dispo)
+- disabledForms : IDs des questionnaires pas encore prêts (seront affichés "(indisponible)")
+- formLabelsByLang : libellés des questionnaires dans la liste (si votre code ne les définit pas déjà)
+- introByFormOverrides : texte d’intro (page 2) spécifique par formulaire et langue (écrase le générique)
+- messagesInterfaceOverrides : petites clés i18n à surcharger (ex. notAvailableLang, only)
+- APP_VERSION_OVERRIDE : pour forcer la version affichée sans éditer APP.version plus bas (optionnel)
+- Il existe deux banques de questions :
+    1. questionsBank : version complète, utilisée en routine (DSM, Sommeil, etc.).
+    2. questionsBankShort (ou Intro) : version réduite, utilisée uniquement pour des tests ou des démonstrations.
+   Le programme charge l’une ou l’autre en fonction du mode choisi (standard vs test).
+COMMENT MODIFIER :
+- Changez simplement les valeurs dans les objets JS ci-dessous (entre <script>
+// ===== PRELUDE (unique, défini très tôt) =====
+window.ttsEnabled = (typeof window.ttsEnabled === "boolean") ? window.ttsEnabled : false;
+
+// Config labels (sv)
+const SCALE_LABELS = {
+  sv: {
+    numeric: ["aldrig","ibland","ofta","mycket ofta","alltid"],
+    verbal1: ["inte alls","kanske","lite","ganska mycket","mycket"],
+    verbal2: ["dålig","rättvis","bra","mycket bra","utmärkt"],
+    helpPrefix: "Välj ett betyg 1–5"
+  }
+};
+
+// Indices 0-based à échelle (notables)
+// Q27/Q46 exclus (texte seul) ; Q30 (29) et Q32 (31) inclus pour échelle
+var notables = [
+  5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,
+  29, 31,32,
+  33,34,35,
+  37,
+  41,42,43,
+  47,48,49
+];
+window.NOTABLES_SET = new Set(notables);
+
+
+// Shim TTS to avoid ReferenceError before declarations
+var ttsEnabled = (typeof window.ttsEnabled === 'boolean') ? window.ttsEnabled : false;
+// Mixte (sans 26)
+window.MIXED_QUESTIONS = new Set([27,28,33,34,35,37,38,39]);
+
+// Verbal2 mapping (1-based "30,32" -> 0-based {29,31})
+function __toZeroBasedSet(csv){
+  return new Set(String(csv).split(/[,;\s]+/).map(s=>parseInt(s,10)).filter(n=>Number.isInteger(n)&&n>=1).map(n=>n-1));
+}
+const VERBAL2_SET = __toZeroBasedSet("30,32");
+
+// Type d'échelle — priorité à Q30/Q32 → VERBAL2
+function getScaleTypeForQuestion(qIndex){
+  if (qIndex === 29 || qIndex === 31) return "verbal2";
+  if (VERBAL2_SET.has(qIndex)) return "verbal2";
+  return "numeric";
+}
+
+// Appliquer labels à l'ouverture de l'échelle
+window.applyScaleLabels = function(qIndex){
+  try{
+    var L = SCALE_LABELS.sv;
+    var t = getScaleTypeForQuestion(qIndex);
+    var labels = (t==="verbal2") ? L.verbal2 : (t==="verbal1") ? L.verbal1 : L.numeric;
+    var labelEl = document.getElementById("scoreLabel");
+    if (labelEl){
+      labelEl.textContent = L.helpPrefix + ": " + labels.map((x,i)=>(i+1)+"="+x).join(", ");
+    }
+    var si = document.getElementById("scoreInput");
+    if (si){ si.min="1"; si.max="5"; }
+  }catch(_){}
+};
+
+// Quand l'UI est prête, marquer questions[i].type="scale" et forcer labels pour Q30/Q32
+document.addEventListener("DOMContentLoaded", function(){
+  try{
+    if (Array.isArray(window.questions)){
+      notables.forEach(function(i){ if (window.questions[i]) window.questions[i].type = "scale"; });
+    }
+  }catch(_){}
+  try{
+    var sc = document.getElementById("scoreContainer");
+    if (sc){
+      var mo = new MutationObserver(function(){
+        try{
+          if (sc.style.display !== "none"){ window.applyScaleLabels(window.currentQuestion); }
+        }catch(_){}
+      });
+      mo.observe(sc, {attributes:true, attributeFilter:["style","class"]});
+    }
+  }catch(_){}
+});
+// ===== /PRELUDE =====
+…</script>).
+- Laissez les clés telles quelles (Français/English/Svenska, DSM/SOMMEIL/etc.).
+====================================================================
+// ----
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,sans-serif}</style>
+<style>
+#introText { white-space: pre-line; line-height: 1.9 !important; }
+#labelCode { font-weight: 700; }
+</style>
+<!-- Menu Langue (donne bien id="langSelect") -->
+<!-- Sélecteur de voix + test -->
+</div>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Questionnaire</title>
+</head>
+<body>
+<!-- ================================================================
+     BLOC DE VALIDITÉ — NOM DE FICHIER + PARAMÈTRES DE LIEN + ADMIN
+// ----
+     ▶ Choix de validité au moment d'envoyer le lien :
+        - ?vdays=5          → X jours à partir de la 1ʳᵉ ouverture (plus sûr)
+        - ?vdate=YYYY-MM-DD → date précise (ex. 2025-09-25)
+        - ?vunlim=1         → illimité
+        - ?vlabel=off       → cache la bannière
+
+     ▶ Fallback par NOM DE FICHIER (si aucun paramètre) :
+        dsm60_sv_3days.html, dsm60_sv_10d.html
+        dsm60_sv_uid-Jean_6days.html  (clé séparée pour "Jean")
+        dsm60_sv_7days_v2.html        (campagne v2)
+        (par défaut, si rien trouvé : 3 jours)
+
+     ▶ ADMIN / ÉDITION ILLIMITÉE (toi) :
+        - Au 1er accès, un prompt demande le code : tape seulement les
+          premières lettres (ex. "swe…") → si ça correspond, tu es admin.
+        - Mémo admin stocké dans localStorage de CET appareil.
+        - Pour l’activer sans prompt : ?setadmin=1
+        - Pour le désactiver : ?clearadmin=1
+        - Bypass ponctuel : ?vadmin=TONCODE (ex. swedsleep25)
+        - Illimité AUTO si ouverture en local (file://) ou localhost.
+
+     ▶ OPTION : date fixe ABSOLUE (dans le code)
+        Si tu veux forcer une date limite commune (ex. 30 sept 2025),
+        remplace la ligne :
+           endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + days);
+        par :
+           endDate = new Date("2025-09-30T23:59:59");
+
+     💡 Smartphones : compatible (prompt + bannières OK sur iOS/Android).
+     ================================================================ -->
+<script>
+(function(){
+  // --------- PARAMÈTRES LIEN ---------
+  function qs(name){ try{ return new URL(window.location.href).searchParams.get(name); }catch(_){ return null; } }
+  var VUNLIM = qs("vunlim");
+  var VDATE  = qs("vdate");
+  var VDAYS  = qs("vdays");
+  var SHOW   = qs("vlabel") !== "off";
+  var SETADM = qs("setadmin")==="1";
+  var CLRADM = qs("clearadmin")==="1";
+  var VADMIN = qs("vadmin");
+
+  // --------- MESSAGES (FR/EN/SV) ---------
+  var M = {
+    fr:{expired:"⚠️ Ce test n’est plus disponible (expiré).", warn:"⚠️ Attention : ce test sera désactivé demain.",
+        welcome:"✅ Ce test est valable jusqu’au ", unlim:"✅ Ce test est valable sans limite.", admin:"🛠️ Mode édition activé (illimité)"},
+    en:{expired:"⚠️ This test is no longer available (expired).", warn:"⚠️ Warning: this test will be disabled tomorrow.",
+        welcome:"✅ This test is valid until ",     unlim:"✅ This test is valid with no expiry.", admin:"🛠️ Edit mode enabled (no expiry)"},
+    sv:{ numeric:["aldrig","ibland","ofta","mycket ofta","alltid"], verbal1:["inte alls","kanske","lite","ganska mycket","mycket"], verbal2:["dålig","rättvis","bra","mycket bra","utmärkt"], helpPrefix:"Välj ett betyg 1–5" }
+  };
+  function fmt(d, lang){
+    var locales = {fr:"fr-FR", en:"en-US", sv:"sv-SE"};
+    return d.toLocaleDateString(locales[lang]||"fr-FR", {year:"numeric", month:"long", day:"numeric"});
+  }
+  function toDateYMD(s){
+    if(!s) return null;
+    var m;
+    if((m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return new Date(+m[1], m[2]-1, +m[3]);
+    if((m=s.match(/^(\d{2})-(\d{2})-(\d{4})$/))) return new Date(+m[3], m[2]-1, +m[1]);
+    if((m=s.match(/^(\d{4})(\d{2})(\d{2})$/)))   return new Date(+m[1], m[2]-1, +m[3]);
+    if((m=s.match(/^(\d{2})(\d{2})(\d{4})$/)))   return new Date(+m[3], m[2]-1, +m[1]);
+    return null;
+  }
+  function startOfDay(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+
+  // --------- IDENTIFIANTS PAR NOM FICHIER ---------
+  var FILE = (location.pathname.split("/").pop() || "").toLowerCase();
+  var mDays = FILE.match(/_(\d+)\s*(?:days|d)\b/i);
+  var requestedDaysFromFile = parseInt(mDays ? mDays[1] : "7", 10);
+  if(!Number.isFinite(requestedDaysFromFile) || requestedDaysFromFile < 1) requestedDaysFromFile = 7;
+  if(requestedDaysFromFile > 30) requestedDaysFromFile = 30;
+
+  var mUid = FILE.match(/_uid-([a-z0-9_-]+)/i);
+  var UID = (mUid ? mUid[1] : "anon");
+
+  var mVer = FILE.match(/_v(\d+)/i);
+  var VERSION = "v" + (mVer ? mVer[1] : "1");
+
+  var FILE_BASE = (FILE.split("_")[0] || "dsm");
+
+  // --------- ADMIN : CODE PAR PROMPT + PERSISTANCE LOCAL ---------
+  var ADMIN_CODE = "swedsleep25"; // 🔒 Ton code complet (modifiable ici)
+  var ADMIN_KEY  = "validity_admin";
+  var isLocal = (location.protocol === "file:") || (location.hostname === "localhost") || (location.hostname === "127.0.0.1");
+
+  try{
+    if (SETADM) localStorage.setItem(ADMIN_KEY, "1");
+    if (CLRADM) localStorage.removeItem(ADMIN_KEY);
+  }catch(_){}
+
+  var ADMIN = false;
+  try{ ADMIN = localStorage.getItem(ADMIN_KEY)==="1"; }catch(_){}
+
+  if (isLocal) ADMIN = true;
+  if (VADMIN && String(VADMIN).toLowerCase() === ADMIN_CODE.toLowerCase()) ADMIN = true;
+
+  // Si pas encore admin → demander le code
+  if (!ADMIN){
+    var ans = prompt("Entrez le code admin (tapez les premières lettres, ex. 'psy...') :");
+
+    // 💡 Version actuelle (souple) : il suffit que l'entrée COMMENCE par le code
+    if (ans && ADMIN_CODE.toLowerCase().startsWith(String(ans).toLowerCase())) {
+      ADMIN = true;
+      try{ localStorage.setItem(ADMIN_KEY, "1"); }catch(_){}
+      alert("Mode édition activé (illimité).");
+    }
+
+    // ⚠️ Pour passer en mode STRICT (exiger le code complet) :
+    // Remplace la ligne ci-dessus par :
+    //   if (ans && ADMIN_CODE.toLowerCase() === String(ans).toLowerCase()) {
+    // → Dans ce cas, il faudra taper tout le code exactement (ex. "swedsleep25")
+  }
+
+  if (ADMIN){
+    if (SHOW){
+      document.write(
+        "<div style='text-align:center;color:#0a7b32;font-weight:bold;line-height:1.6;margin:8px 0'>"
+        + M.fr.admin + "<br>" + M.en.admin + "<br>" + M.sv.admin + "</div>"
+      );
+    }
+    return; // pas d'expiration en mode admin
+  }
+
+  // --------- CALCUL ÉCHÉANCE POUR UTILISATEUR ---------
+  var unlimited = false, endDate = null;
+
+  if (VUNLIM === "1") {
+    unlimited = true;
+  } else if (VDATE) {
+    endDate = toDateYMD(VDATE);
+    if(!endDate) unlimited = true;
+  } else if (VDAYS) {
+    var daysParam = parseInt(VDAYS, 10);
+    if (Number.isFinite(daysParam) && daysParam > 0) {
+      var KEY_P = FILE_BASE + "_firstOpen_param_" + (UID||"anon") + "_" + (VERSION||"v1") + "_" + daysParam;
+      var startISO_P = null;
+      try{ startISO_P = localStorage.getItem(KEY_P); }catch(_){}
+      if (!startISO_P){
+        startISO_P = new Date().toISOString().slice(0,10);
+        try{ localStorage.setItem(KEY_P, startISO_P); }catch(_){}
+      }
+      var startDate = toDateYMD(startISO_P) || new Date();
+      endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + daysParam);
+    } else {
+      unlimited = true;
+    }
+  } else {
+    var KEY_F = FILE_BASE + "_firstOpen_" + (UID||"anon") + "_" + (VERSION||"v1") + "_" + requestedDaysFromFile;
+    var st = null;
+    try{ st = localStorage.getItem(KEY_F); }catch(_){}
+    if (!st){
+      var firstOpenISO = new Date().toISOString().slice(0,10);
+      try{ localStorage.setItem(KEY_F, firstOpenISO); }catch(_){}
+      st = firstOpenISO;
+    }
+    var startDateF = toDateYMD(st) || new Date();
+    endDate = new Date(startDateF.getFullYear(), startDateF.getMonth(), startDateF.getDate() + requestedDaysFromFile);
+  }
+
+  if (!SHOW) return;
+
+  // --------- AFFICHAGE / BLOCAGE ---------
+  var now = startOfDay(new Date());
+  if (unlimited){
+    document.write(
+      "<div style='text-align:center;color:#0a7b32;font-weight:bold;line-height:1.6;margin:8px 0'>"
+      + M.fr.unlim + "<br>" + M.en.unlim + "<br>" + M.sv.unlim + "</div>"
+    );
+    return;
+  }
+
+  endDate = startOfDay(endDate);
+  var oneDay = 24*60*60*1000;
+  var diffDays = Math.ceil((endDate - now)/oneDay);
+
+  if (now > endDate){
+    document.write(
+      "<h2 style='color:#d00000;text-align:center;line-height:1.6;margin:10px 0'>"
+      + M.fr.expired + "<br>" + M.en.expired + "<br>" + M.sv.expired + "</h2>"
+    );
+    window.__FORM_EXPIRED__ = true;
+  } else {
+    document.write(
+      "<div style='text-align:center;color:#b10000;font-weight:700;line-height:1.6;margin:8px 0'>"
+      + M.fr.welcome + fmt(endDate,"fr") + "<br>"
+      + M.en.welcome + fmt(endDate,"en") + "<br>"
+      + M.sv.welcome + fmt(endDate,"sv") + "</div>"
+    );
+    if (diffDays === 1){
+      document.write(
+        "<div style='background:#d00000;color:white;text-align:center;padding:10px;font-weight:bold;line-height:1.6'>"
+        + M.fr.warn + "<br>" + M.en.warn + "<br>" + M.sv.warn + "</div>"
+      );
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", function(){
+    if (window.__FORM_EXPIRED__){
+      ["menuScreen","introScreen","main","summary"].forEach(function(id){
+        var el = document.getElementById(id);
+        if (el){ el.style.pointerEvents="none"; el.style.opacity="0.5"; }
+      });
+    }
+  });
+})();
+</script>
+<!-- ================================================================
+     FIN DU BLOC DE VALIDITÉ
+     ================================================================ -->
+
+<script>
+// === UI CENTRALISÉE (copié du FR, adaptée SV) ===
+var UI_STRINGS = {
+  "Français": {
+    homeTitle: "Sélectionner Questionnaire et Langue",
+    questionnaire: "Questionnaire :",
+    language: "Langue :",
+    continue: "Continuer",
+    introTitle: "Introduction",
+    codeLabel: "Entrez un code (4 chiffres dont vous devrez vous rappeler) :",
+    start: "Commencer",
+    tts: { label:"Voix (selon l’appareil) :", test:"Test voix", hint:"Si rien ne parle, choisissez une autre voix ou vérifiez la configuration audio." },
+    notAvailableLang: "Langue non disponible pour ce formulaire (Français uniquement).",
+    notAvailableForm: "Non disponible. Veuillez choisir DSM.",
+    headerIntro: [
+      "Choisissez un questionnaire et une langue pour commencer.",
+      "Vos réponses sont confidentielles. Prenez votre temps."
+    ]
+  },
+  "English": {
+    homeTitle: "Select Questionnaire and Language",
+    questionnaire: "Questionnaire:",
+    language: "Language:",
+    continue: "Continue",
+    introTitle: "Introduction",
+    codeLabel: "Enter your code (4 digits):",
+    start: "Start",
+    tts: { label:"Voice (device dependent):", test:"Test voice", hint:"If you hear nothing, pick another voice or check audio settings." },
+    notAvailableLang: "Language not available for this form (French only).",
+    notAvailableForm: "Not available. Please choose DSM.",
+    headerIntro: [
+      "Pick a questionnaire and a language to get started.",
+      "Your answers are confidential. Take your time."
+    ]
+  },
+  "Svenska": {
+    homeTitle: "Välj formulär och språk",
+    questionnaire: "Formulär:",
+    language: "Språk:",
+    continue: "Fortsätt",
+    introTitle: "Introduktion",
+    codeLabel: "Ange din kod (4 siffror):",
+    start: "Börja",
+    tts: { label:"Röst (enhetsberoende):", test:"Testa röst", hint:"Om inget hörs, välj en annan röst eller kontrollera ljudinställningarna." },
+    notAvailableLang: "Språk ej tillgängligt för detta formulär (endast franska).",
+    notAvailableForm: "Inte tillgänglig. Välj DSM.",
+    headerIntro: [
+      "Välj formulär och språk för att börja.",
+      "Dina svar är konfidentiella. Ta den tid du behöver."
+    ]
+  }
+};
+
+var FORM_LABELS = {
+  "Français": { DSM:"DSM-5", Sommeil:"Sommeil", Psych:"Psych", Neurology:"Neurologie", MedGle:"Médecine générale" },
+  "English" : { DSM:"DSM-5", Sommeil:"Sleep",   Psych:"Psych", Neurology:"Neurology",  MedGle:"General Medicine" },
+  "Svenska" : { DSM:"DSM-5", Sommeil:"Sömn",    Psych:"Psykiatri", Neurology:"Neurologi", MedGle:"Allmänmedicin" }
+};
+
+var AVAILABLE_LANGS_BY_FORM = { DSM:["Svenska"], Sommeil:[], Psych:[], Neurology:[], MedGle:[] };
+</script>
+<script>
+// Mirror for legacy menu logic expecting window.availableLangsByForm
+window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurology: [], MedGle: [] };
+</script>
+
+
+
+  
+  <!-- ========== BANQUE DE QUESTIONS (multi-formulaires) ========== -->
+  <script>
+    /* Remplacez ces tableaux par vos questions réelles.
+       Laissez les clés (DSM, SOMMEIL, NEUROLOGIE, PSYCHIATRIE, MEDEG) et les langues. */
+    window.QUESTIONNAIRE_BANK = {
+      DSM: {
+        Français: [
+          { section: 1, skipIfNon: true, text: "Avez-vous eu récemment des périodes de tristesse ? (Si non, passer à la section suivante)" },
+          { id:"DSM_FR_Q1", type:"oui-non", texte:"Ces deux dernières semaines, vous êtes-vous senti(e) déprimé(e) ?" },
+          { id:"DSM_FR_Q2", type:"texte",   texte:"Pouvez-vous préciser ?" }
+        ],
+        English: [
+          { section: 1, skipIfNon: true, text: "Have you recently had periods of sadness? (If no, skip to next section)" },
+          { id:"DSM_EN_Q1", type:"oui-non", texte:"In the last two weeks, have you felt depressed?" },
+          { id:"DSM_EN_Q2", type:"texte",   texte:"Please specify." }
+        ],
+        Svenska: [
+          { section: 1, skipIfNon: true, text: "Har du nyligen haft perioder av nedstämdhet? (Om nej, gå vidare)" },
+          { id:"DSM_SV_Q1", type:"oui-non", texte:"Har du känt dig deprimerad de senaste två veckorna?" },
+          { id:"DSM_SV_Q2", type:"texte",   texte:"Förklara gärna." }
+        ]
+      },
+      SOMMEIL: {
+        Français: [
+          { section: 1, skipIfNon: true, text: "Avez-vous des difficultés d’endormissement ? (Si non, passer à la section suivante)" },
+          { id:"SOM_FR_Q1", type:"oui-non", texte:"Avez-vous des difficultés à vous endormir ?" },
+          { id:"SOM_FR_Q2", type:"texte",   texte:"À quelle fréquence ?" }
+        ],
+        English: [
+          { section: 1, skipIfNon: true, text: "Do you have trouble falling asleep? (If no, skip to next section)" },
+          { id:"SOM_EN_Q1", type:"oui-non", texte:"Do you have difficulty falling asleep?" },
+          { id:"SOM_EN_Q2", type:"texte",   texte:"How often?" }
+        ],
+        Svenska: [
+          { section: 1, skipIfNon: true, text: "Har du svårt att somna? (Om nej, gå vidare)" },
+          { id:"SOM_SV_Q1", type:"oui-non", texte:"Har du svårt att somna?" },
+          { id:"SOM_SV_Q2", type:"texte",   texte:"Hur ofta?" }
+        ]
+      },
+      NEUROLOGIE: {
+        Français: [
+          { section: 1, skipIfNon: true, text: "Avez-vous eu des maux de tête récents ? (Si non, section suivante)" },
+          { id:"NEURO_FR_Q1", type:"oui-non", texte:"Maux de tête fréquents ?" },
+          { id:"NEURO_FR_Q2", type:"texte",   texte:"Précisez la fréquence." }
+        ],
+        English:  [
+          { section: 1, skipIfNon: true, text: "Any recent headaches? (If no, next section)" },
+          { id:"NEURO_EN_Q1", type:"oui-non", texte:"Frequent headaches?" },
+          { id:"NEURO_EN_Q2", type:"texte",   texte:"How often?" }
+        ],
+        Svenska:  [
+          { section: 1, skipIfNon: true, text: "Har du haft huvudvärk nyligen? (Om nej, nästa avsnitt)" },
+          { id:"NEURO_SV_Q1", type:"oui-non", texte:"Ofta huvudvärk?" },
+          { id:"NEURO_SV_Q2", type:"texte",   texte:"Hur ofta?" }
+        ]
+      },
+      PSYCHIATRIE: {
+        Français: [ { section:1, skipIfNon:true, text:"Section psychiatrie…" } ],
+        English:  [ { section:1, skipIfNon:true, text:"Psychiatry section…" } ],
+        Svenska:  [ { section:1, skipIfNon:true, text:"Psykiatri avsnitt…" } ]
+      },
+      MEDEG: {
+        Français: [ { section:1, skipIfNon:true, text:"Médecine générale…" } ],
+        English:  [ { section:1, skipIfNon:true, text:"General medicine…" } ],
+        Svenska:  [ { section:1, skipIfNon:true, text:"Allmänmedicin…" } ]
+      }
+    };
+  </script>
+  <!-- ========== /BANQUE DE QUESTIONS ========== -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title id="pageTitle">Questionnaire</title>
+  <style>
+    body{
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      margin: 0;
+      padding: 0;
+      color: #333;
+    }
+    header, footer{
+      background-color: #0056cc;
+      color: #fff;
+      padding: 1em;
+      text-align: center;
+    }
+    section{
+      background-color: #fff;
+      margin: 1.5em auto;
+      padding: 1.5em;
+      border-radius: 8px;
+      max-width: 900px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1, h2{
+      color: #0056cc;
+      margin-top: 0;
+    }
+    /* Barre de titre compacte */
+    #titleBar{
+      display:flex;
+      gap:10px;
+      justify-content:center;
+      align-items:baseline;
+      margin:0;
+    }
+    #versionNum{ font-weight:normal; opacity:.95; }
+    /* Instructions */
+    .instructions{
+      background-color:#ffffcc;
+      color:#000;
+      font-size:1em;
+      padding:10px;
+      border-radius:5px;
+      margin-bottom:10px;
+    }
+    .instructions span{ color:#c00; font-weight:bold; }
+    #microStatus{ font-weight:bold; margin-left:10px; color:red; }
+    .question-number{ font-weight:bold; margin-bottom:5px; }
+    .section-number{ color:#0056cc; font-weight:bold; margin-bottom:10px; }
+    textarea, input[type="text"], input[type="number"]{
+      width:96%;
+      font-size:1em;
+      padding:8px;
+      margin-top:5px;
+      border:1px solid #ccc;
+      border-radius:4px;
+      min-height:40px;
+    }
+    button{
+      background-color:#0056cc;
+      color:#fff;
+      border:none;
+      padding:10px 18px;
+      margin:8px 5px;
+      border-radius:4px;
+      cursor:pointer;
+      font-size:1em;
+    }
+    button:hover{ background-color:#004bb5; }
+    .error{ color:red; margin-top:8px; min-height:20px; font-weight:bold; }
+    #progressContainer{ background:#ddd; width:100%; height:8px; margin-top:15px; border-radius:5px; }
+    #progressBar{ background:#0056cc; height:8px; width:0%; border-radius:5px; }
+    #scoreContainer{ display:none; margin-top:10px; }
+    #scoreContainer label{ color:red; font-weight:bold; }
+    ul{ list-style:none; padding:0; }
+    textarea.editable{ width:95%; min-height:50px; margin-top:5px; margin-bottom:15px; border:1px solid #ccc; border-radius:5px; }
+    /* Accueil : selects plus petits et lisibles */
+    #menuScreen select{
+      width:50%;
+      max-width:360px;
+      font-size:14px;
+      padding:4px 8px;
+      height:32px;
+      background:#fff;
+      color:#000;
+      border:1px solid #888;
+      box-shadow:none;
+      appearance:auto;
+    }
+    #menuScreen label{
+      display:inline-block;
+      min-width:140px;
+      margin-bottom:4px;
+    }
+    /* >>> AJOUT : rendre le texte du header lisible (blanc sur bandeau bleu) <<< */
+    header h1, header #titleBar, header #titleBar span {
+      color: #fff !important;
+    }
+    /* >>> AJOUT : rendre le texte du header lisible (blanc sur bandeau bleu) <<< */
+    header h1, header #titleBar, header #titleBar span { color: #fff !important; }
+    /* Intro d'accueil (bandeau bleu) */
+    .header-intro{
+      margin:.25em auto 0;
+      max-width:900px;
+      font-size:.95em;
+      line-height:1.35;
+      opacity:.95;
+    }
+    header .header-intro{ color:#fff; }
+    /* Intro un peu plus grande dans la banderole */
+    header .header-intro{
+      font-size: 1.15em;
+      line-height: 1.45;
+      font-weight: 500;
+      opacity: 1;
+    }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="titleBar">
+      <span id="mainTitle">Questionnaire DSM-5</span>
+      —
+      <span id="versionNum">Version Q10p</span>
+    </h1>
+    <div id="headerIntro" class="header-intro" aria-live="polite" style="display:none"></div>
+  </header>
+  <!-- ======================================================
+       ACCUEIL / INTRO / QUESTIONNAIRE / RÉSUMÉ
+       ====================================================== -->
+  <section id="menuScreen">
+    <h2>Sélectionner Questionnaire et Langue</h2>
+    <label for="questionnaireSelect">Questionnaire :</label>
+    <select id="questionnaireSelect"></select>
+    <br><br>
+<!-- ▼▼ TTS: sélecteur de voix par langue ▼▼ -->
+<div id="voiceRow" style="margin-top:10px;">
+  <label for="voiceSelect">Voix (selon l’appareil) :</label>
+  <select id="voiceSelect" style="width:50%;max-width:360px;height:32px;"></select>
+  <button id="testVoiceBtn" type="button" style="margin-left:6px;">Test voix</button>
+  <div id="voiceHint" style="font-size:.9em;opacity:.8;margin-top:4px;"></div>
+</div>
+<!-- ▲▲ TTS: sélecteur de voix par langue ▲▲ -->
+    <label for="langSelect">Langue :</label>
+    <select id="langSelect"></select>
+    <br><br>
+    <div id="menuError" class="error"></div>
+    <button id="nextLangBtn">Continuer</button>
+  </section>
+  <section id="introScreen" style="display:none;">
+    <h2>Introduction</h2>
+    <p id="introText"></p>
+    <label id="labelCode"></label><br>
+    <input type="text" id="codeInput" maxlength="4" inputmode="numeric" pattern="[0-9]*" />
+    <div id="introErrorMsg" class="error"></div>
+    <br>
+    <button id="startBtn">Commencer</button>
+  </section>
+  <section id="main" style="display:none;">
+    <div id="instructionBox" class="instructions">
+      Au clavier <span>RETOUR</span>, en vocal dire <span>STOP</span>
+      <span id="microStatus">🎤 Micro fermé</span>
+    </div>
+    <div id="sectionNum" class="section-number"></div>
+    <div id="questionNum" class="question-number"></div>
+    <div id="questionText"></div>
+    <textarea id="answerInput"></textarea>
+    <div id="mainErrorMsg" class="error"></div>
+    <div id="scoreContainer">
+      <label id="scoreLabel"></label>
+      <br>
+      <input type="number" id="scoreInput" min="1" max="5" />
+      <button id="validateScoreBtn">OK</button>
+    </div>
+    <div id="progressContainer"><div id="progressBar"></div></div>
+    <button id="validerBtn">Valider</button>
+    <button id="corrigerBtn">Corriger</button>
+    <button id="pauseBtn">Pause</button>
+    <button id="voiceBtn" type="button" onclick="(function(){var SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){alert('Taligenkänning stöds inte i denna webbläsare.');return;}if(!(window.isSecureContext||location.protocol==='https:'||location.hostname==='localhost')){alert('Mikrofon kräver HTTPS (eller localhost) på Android.');return;}if(!window.__rec){window.__rec=new SR();var lang=(window.currentLang==='Français'?'fr-FR':(window.currentLang==='English'?'en-US':'sv-SE'));window.__rec.lang=lang;window.__rec.interimResults=true;window.__rec.continuous=false;window.__rec.maxAlternatives=1;window.__rec.onstart=function(){var b=document.getElementById('voiceBtn');if(b){var on=(window.messagesInterface&&window.currentLang&&window.messagesInterface[window.currentLang]?window.messagesInterface[window.currentLang].microOn:'🎤 Mikrofon på');b.textContent=on;b.classList.add('active');}};window.__rec.onend=function(){var b=document.getElementById('voiceBtn');if(b){var off=(window.messagesInterface&&window.currentLang&&window.messagesInterface[window.currentLang]?window.messagesInterface[window.currentLang].microOff:'🎤 Mikrofon av');b.textContent=off;b.classList.remove('active');}};window.__rec.onerror=function(e){console.warn('Reco error',e);var b=document.getElementById('voiceBtn');if(b){var off=(window.messagesInterface&&window.currentLang&&window.messagesInterface[window.currentLang]?window.messagesInterface[window.currentLang].microOff:'🎤 Mikrofon av');b.textContent=off;b.classList.remove('active');}};}var ok=true; try{window.__rec.start();}catch(e){ok=false;}if(!ok && navigator.mediaDevices && navigator.mediaDevices.getUserMedia){navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){try{s.getTracks().forEach(function(t){t.stop();});}catch(_){}}).then(function(){setTimeout(function(){try{window.__rec.start();}catch(_){}} , 0);});}})()">🎙️ Mikrofon</button>
+    <button id="ttsToggleBtn" onclick="(function(){var cur=(typeof window.ttsEnabled==='undefined'?true:!!window.ttsEnabled);window.ttsEnabled=!cur;try{ttsEnabled=window.ttsEnabled;}catch(_){ }if(!window.ttsEnabled && window.speechSynthesis && speechSynthesis.cancel){try{speechSynthesis.cancel();}catch(_){}}try{if(typeof updateTTSBtn==='function')updateTTSBtn();}catch(_){ }})()">Röst</button>
+  </section>
+  <section id="summary" style="display:none;">
+    <h2 id="summaryTitle">Sammanfattning och korrigering</h2>
+    <p><strong id="summaryCodeLabel">Formulärkod :</strong> <span id="resumeCode"></span></p>
+    <ul id="answersList"></ul>
+    <label id="globalCommentLabel" for="globalComment">Kommentarer</label>
+    <textarea id="globalComment" placeholder="Votre commentaire global…"></textarea>
+    <br>
+    <button id="pdfBtn">Exportera PDF</button>
+    <button id="copyBtn">Kopiera</button>
+    <button id="closeBtn">Slutför</button>
+    <!-- CODICENT: send button + status (ensured) -->
+    <button id="sendToCodicentBtn">Skicka för analys</button>
+    <div id="codicentStatus" style="display:none; margin-top:8px; font-weight:600;"></div>
+  </section>
+  <footer style="text-align:center;font-size:.85em;color:#ddd;margin-top:2em;">
+    <p>© 2025 SwedSleep - vers 70</p>
+  </footer>
+  <!-- ======================================================
+       SCRIPT – CONFIG, DONNÉES, FONCTIONS
+       ====================================================== -->
+  <script>
+  // ─────────────────────────────────────────────────────────
+  // CONFIG : titre dynamique (nom + version)
+  // ─────────────────────────────────────────────────────────
+  const APP = {
+    nom: "Questionnaire DSM-5",
+    version: "Version Q70p"};
+  function majTitrePage(nom = APP.nom, version = APP.version){
+    try{
+      document.getElementById('pageTitle').textContent = version ? (nom + " - " + version) : nom;
+    }catch(_){}
+  }
+  function updateHeaderBar(){
+    try{
+      document.getElementById("mainTitle").textContent  = APP.nom;
+      document.getElementById("versionNum").textContent = APP.version;
+    }catch(_){}
+    majTitrePage();
+  }
+  // ─────────────────────────────────────────────────────────
+  // DONNÉES : formulaires, intros, messages, questions
+  // ─────────────────────────────────────────────────────────
+  const disabledForms = ["Sommeil","Psych","Neurology","MedGle"];
+  const introByForm = {
+    "Français": {
+      unavailable: "indisponible",
+      DSM: "Ce questionnaire est anonyme.\nJe vais vous poser des questions se rapportant aux 2 derniers mois.\nCes questions sont regroupées en sections.\nComptez environ 15 min. Vous pouvez faire une pause.\nEn cas d’erreur, vous pouvez corriger.\nRépondez DE PREFERENCE sur le clavier mais vous pouvez aussi utiliser le micro.\nParlez alors lentement et distinctement, terminez vos réponses en disant STOP ou VALIDER.\nÀ la fin, vous pourrez corriger vos réponses, ajouter un commentaire, copier vos réponses, les enregistrer en PDF et les envoyer pour analyse grâce aux boutons prévus à cet effet.\nSi vous ne voulez pas entendre les questions pressez la touche VOCAL",
+      Sommeil: "Questionnaire Sommeil (FR)…",
+      Psych: "Questionnaire Psych (FR)…",
+      Neurology: "Questionnaire Neurologie (FR)…",
+      MedGle: "Questionnaire Médecine Générale (FR)…",
+      comments: "Kommentarer"},
+    "English": {
+      unavailable: "unavailable",
+      DSM: "This form screens DSM-5 related symptoms. Answer freely. You can pause anytime.",
+      Sommeil: "Sleep questionnaire (EN)…",
+      Psych: "Psych questionnaire (EN)…",
+      Neurology: "Neurology questionnaire (EN)…",
+      MedGle: "General Practice questionnaire (EN)…",
+      comments: "Comments"},
+    "Svenska": {
+      unavailable: "otillgänglig",
+      DSM:"Detta frågeformulär är anonymt.\nJag kommer att ställa frågor som rör de senaste 2 månaderna.\nDessa frågor är grupperade i avsnitt.\nDet tar cirka 15 minuter. Du kan ta en paus.\nOm du gör ett misstag kan du korrigera det.\nSvara HELST på tangentbordet men du kan också använda mikrofonen.\nTala sedan långsamt och tydligt, avsluta dina svar genom att säga SLUT.\nI slutet kan du korrigera dina svar, lägga till en kommentar, kopiera dina svar,spara dem som en PDF och skicka dem för analys med hjälp av de knappar som finns\nOm du inte vill höra frågorna, tryck på RÖST-knappen",
+      Sommeil: "Sömnformulär (SV)…",
+      Psych: "Psykologiformulär (SV)…",
+      Neurology: "Neurologiformulär (SV)…",
+      MedGle: "Allmänmedicin formulär (SV)…",
+      comments: "Kommentarer"},
+      sendForAnalysis: "Skicka för analys",
+      codicentSuccessPrefix: "Envoyé à Codicent ! ID : ",
+      codicentErrorPrefix: "Erreur d’envoi à Codicent : ",
+      noTokenMsg: "Aucun jeton ?token=… trouvé dans l’URL.",
+      sendForAnalysis: "Skicka för analys"
+      };
+  let config = {
+    nomQuestionnaire: "Questionnaire DSM-5",
+    version: "v Q10p",
+    couleursBande: "#ffffcc",
+    langues: ["Français","English","Svenska"],
+ // Temps de reponse avant de passer a la prochaine question - "minDelayDefault" doit etre plus petit que que "tempsMaxReponse")
+    tempsBaseReponse: 1200,// delai de base avant de passer à la question suivante, ici defaut 1200 =1,2 sec
+    tempsParCaractere: 50,//delai supplemntaire par caractère saisi dans la réponse (50 ms/caractere)
+    tempsMaxReponse: 4000, // plafond maximum (ici 4000= 4 sec)
+// <<< nouveaux planchers >>>
+  minDelayDefault: 1200, // 1.2 s
+  minDelayNo:      1000, // 1.0 s pour "non/no/nej"
+  minDelaySkip:    1500  // 1.5 s si saut de section
+  };
+  // QUESTIONS – liste complète (sections 1 → 23)
+  let questions = [{ section: 1, text: "Hur gammal är du?" },
+{ text: "Är du man, kvinna eller annat?" },
+{ text: "Vad har du för yrke?" },
+{ section: 2, text: "Finns det kända medicinska tidigare sjukdomar? Om ja, specificera." },
+{ text: "Tar du för närvarande några läkemedelsbehandlingar? Om ja, ange vilka, inklusive receptfria läkemedel och kosttillskott." },
+{ section: 3, text: "Känner du nervositet, ångest eller överdriven spänning?" },
+{ text: "Har du en tendens att oroa dig överdrivet för olika saker eller har svårt att kontrollera din oro?" },
+{ text: "Har du svårt att koncentrera dig, t.ex. när du läser eller tittar på tv?" },
+{ text: "Känner du dig rastlös eller har svårt att sitta stilla?" },
+{ text: "Har du förändrad aptit, såsom minskad eller ökad aptit?" },
+{ text: "Känner du misslyckande eller att du har svikit dig själv eller andra?" },
+{ section: 4, text: "Saknar du intresse eller glädje i sådant du tidigare tyckte om?" },
+{ text: "Känner du sorg, nedstämdhet eller hopplöshet?" },
+{ text: "Känner du dig trött eller har du brist på energi?" },
+{ section: 5, text: "Upprepar du vissa handlingar, som att tvätta händerna, räkna, kontrollera eller ordna saker? " },
+{ text: "Utförs dessa beteenden som svar på tvångstankar eller rädsla?" },
+{ text: "Upptar dessa tankar eller beteenden mer än en timme per dag eller stör de din vardag avsevärt?" },
+{ section: 6, text: "Blir du lätt irriterad eller arg?" },
+{ text: "Upplever du att du har temperamentsutbrott som andra finner oproportionerliga till situationen?" },
+{ section: 7, text: "Har du perioder där du känner dig ovanligt energisk och upprymd?" },
+{ text: "Under dessa perioder, sysslar du med aktiviteter som kan ha smärtsamma konsekvenser?" },
+{ section: 8, text: "Känner du dig någonsin frånkopplad från dig själv eller din omgivning?" },
+{ text: "Har du upplevt en känsla av overklighet omkring din omgivning?" },
+{ section: 9, text: "Har du problem med minnet, till exempel att komma ihåg saker eller med orientering (att hitta hem)?" },
+{ section: 10, text: "Hur har dinna nuvarande besvär påverkat din förmåga att arbeta, ta hand om saker hemma eller komma överens med andra människor?" },
+{ text: "Hur stödjande anser du att din nuvarande livssituation och sociala relationer är?" },
+{ section: 11, text: "Använder du tobak, alkohol, narkotika eller koffein? Om ja, ange mängden och hur ofta." },
+{ section: 12, text: "Upplever du någon kronisk smärta eller obehag? Om ja, beskriv." },
+{ text: "Finns det andra fysiska symtom som du har märkt och är oroad över?" },
+{ text: "Hur skulle du bedöma din övergripande fysiska hälsa ?" },
+{ section: 13, text: "Har du tankar på att du skulle vara bättre död eller skada dig själv på något sätt?" },
+{ section: 14, text: "Hur skulle du bedöma din övergripande sömnkvalitet?" },
+{ text: "Har du svårt att somna på kvällen eller att sova kvar under natten?" },
+{ text: "Vaknar du upp känslig förfriskad på morgonen eller fortfarande trött?" },
+{ text: "Upplever du några störningar under sömnen, såsom mardrömmar, sömngång eller att ofta vakna under natten?" },
+{ text: "Använder du någon medicin eller substans för att hjälpa dig att sova?, vilka ?" },
+{ text: "Har några livsstilsförändringar eller nyliga händelser påverkat ditt sömnmönster (utbrändhet, olycka...?" },
+{ section: 15, text: "Vilken fysisk aktivitet eller motion brukar du göra?" },
+{ section: 16, text: "Har du tidigare blivit diagnostiserad med några psykiska störningar? om ja, vilken ?" },
+{ text: "Har du tidigare fått behandling för psykiska problem (terapi, rådgivning, medicinering)? Om ja, vänligen ange detaljer." },
+{ section: 17, text: "Har du uppfattat röster som andra verkar inte höra?" },
+{              text: "Har du haft föreställningar eller idéer som andra personer anser vara märkliga eller ovanliga?" },
+{ section: 18, text: "Händer det att du oroar dig överdrivet mycket för din vikt eller din kroppsliga framtoning?" },
+{              text: "Har du haft perioder med betydande matrestriktioner, självframkallade kräkningar eller överdrivet och okontrollerbart ätande?" },
+{ section: 19, text: "Har du märkt en tydlig minskning av ditt intresse eller din tillfredsställelse när det gäller din sexualitet?" },
+{ section: 20, text: "Har du varit utsatt för en traumatisk händelse som fortsätter att störa dig (mardrömmar, flashbacks, undvikande)?" },
+ {              text: "Upplever du starka stressreaktioner i samband med smärtsamma minnen?" },
+{ section: 21, text: "Har du ofta svårigheter att hålla koncentrationen, avsluta det du påbörjar eller sitta stilla?" },
+{              text: "Blir du ofta distraherad eller känner du en ovanlig inre eller fysisk rastlöshet?" },
+{ section: 22, text: "Har du varit utsatt för våld eller misshandel? " },
+{              text: "vill du tala om det ?"},
+{ section: 23, text: "Finns det något specifikt ämne som du vill ta upp under konsultationen?" },
+{              text: "Vilka är dina mål eller förväntningar med att konsultera just nu?" }];
+// Appliquer les flags skip à la 1ʳᵉ question des sections 5, 7, 22 (utilise window.SECTIONS_SKIP)
+if (typeof preparerQuestions === "function") {
+  if (!Array.isArray(window.SECTIONS_SKIP)) window.SECTIONS_SKIP = [5,7,22];
+  preparerQuestions(questions, window.SECTIONS_SKIP);
+}
+
+  // Indices de questions à échelle (1–5) : marquage "scale"
+  // ─────────────────────────────────────────────────────────
+// Questions en MODE MIXTE (texte → puis score 1–5)
+// Référence 0-based (N° question = index+1).
+// Exemple: Q28=27, Q29=28, Q33=32, Q34=33, Q35=34, Q36=35, Q38=37
+
+// (Note) Texte d’abord (ENTER/STOP/SLUT) → ouverture automatique de l’échelle 1–5.
+// === MULTI-ÉCHELLES + LANG + MIXTE (JS-ONLY, collé dans ce <script>) ===
+// 0) Langue active (suit currentLang si updateInterfaceLang l'actualise)
+window.SCALE_LANG = window.SCALE_LANG || "sv";
+// 1) Tables 1-based (comme notables)
+     // ex: "30, 33"
+   // Q25 (index 24) en Text2
+// 2) MIXTE (texte → score) en 0-based (garde si tu l'utilises déjà)
+
+// Alias (si le code utilise le nom sans window.)
+
+
+// 3) Conversion 1-based → 0-based
+// 4) Libellés par langue (5 éléments = scores 1→5)
+
+// ─────────────────────────────────────────────
+// Étiquettes d’échelle par langue
+// ─────────────────────────────────────────────
+
+
+// ─────────────────────────────────────────────
+// Questions notables (indices 0-based)
+// ─────────────────────────────────────────────
+// Q27 (26) retirée → texte seul
+// Q30 (29) ajoutée → échelle VERBAL2
+// Q32 (31) reste → échelle VERBAL2
+// Q46 (45) retirée → texte seul
+let notables = [
+  5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,
+  29,       // ✅ Q30 en VERBAL2
+  31,32,    // ✅ Q32 en VERBAL2
+  33,34,35, // Q35/Q36 restent en mixte
+  37,
+  41,42,43,
+  47,48,49
+];
+
+// Marquage des questions "scale"
+notables.forEach(i => { if (questions[i]) questions[i].type = "scale"; });
+
+// Accès rapide
+
+
+// Tables verbales 1-based → sets 0-based
+     // adapte si besoin
+  // ✅ Q30/Q32 verbale2
+
+
+
+
+
+
+// ----
+
+
+// Suivre la langue active via updateInterfaceLang si présent
+(function(){
+  try{
+    function __mapLang(x){ x=(x||"").toLowerCase(); if(x.includes("sv"))return"sv"; if(x.includes("fr"))return"fr"; if(x.includes("en"))return"en"; return"en"; }
+    const __old = window.updateInterfaceLang;
+    window.updateInterfaceLang = function(){
+      try{ if (typeof __old==="function") __old(); }catch(_){}
+      try{
+        window.SCALE_LANG = __mapLang(window.currentLang||"sv");
+        const sc = document.getElementById("scoreContainer");
+        if (sc && sc.style.display!=="none"){ window.applyScaleLabels(window.currentQuestion); }
+      }catch(_){}
+    };
+  }catch(_){}
+})();
+// ─────────────────────────────────────────────────────────
+// ─── MODIF (GPT): Questions à ÉCHELLE VERBALE (affichage) ───
+// Indique ici les indices 0-based des questions qui doivent afficher
+// les libellés verbaux suédois pour l'échelle 1–5, au lieu du texte
+// standard (aldrig/sällan/ibland/ofta/mycket ofta).
+// Ex.: Q25=24, Q26=25, Q30=29, Q32=31
+// ➜ Pour ajouter d'autres questions plus tard, ajoute simplement leur index :
+const VERBAL_SCALE_QUESTIONS = new Set([24, 25, 29, 31, 36]);
+
+// Apply Swedish labels to 1–5 controls for current question
+function __applySwedishLabelsForCurrent(){
+  try{
+    var q = window.currentQuestion;
+    if (typeof q !== "number") return;
+    var isText2 = (q===29 || q===31);
+    var labels = isText2 ? ["dålig","rättvis","bra","mycket bra","utmärkt"]
+                         : ["inte alls","kanske","lite","ganska mycket","mycket"];
+    // Buttons
+    var btns = document.querySelectorAll(".score-btn, .score-option, .btn-score, .scale-btn, [data-score], [data-value]");
+    for (var i=0;i<btns.length;i++){
+      var b=btns[i];
+      var val = b.getAttribute("data-value") || b.getAttribute("data-score") || b.value || (b.textContent||"").trim();
+      var n = parseInt(val,10);
+      if (n>=1 && n<=5){
+        b.textContent = n + " \u2013 " + labels[n-1];
+        try{ b.setAttribute("title", labels[n-1]); }catch(_){}
+      }
+    }
+    // Radios + labels
+    var radios = document.querySelectorAll("input[type='radio'][value]");
+    for (var j=0;j<radios.length;j++){
+      var r = radios[j];
+      var n2 = parseInt(r.value,10);
+      if (n2>=1 && n2<=5){
+        var lab = null;
+        if (r.id) lab = document.querySelector("label[for='"+r.id.replace(/([:\\.\\[\\]\\(\\)])/g,"\\\\$1")+"']");
+        if (!lab){
+          var next = r.nextElementSibling;
+          if (next && next.tagName && next.tagName.toLowerCase()==="label") lab = next;
+        }
+        if (lab){
+          lab.textContent = n2 + " \u2013 " + labels[n2-1];
+        }
+      }
+    }
+  }catch(_){}
+}
+
+// ─────────────────────────────────────────────────────────
+// Sections à skip (si la 1re Q répond "non" etc.)
+  window.SECTIONS_SKIP = [5,7,22];
+  // ─────────────────────────────────────────────────────────
+  // MESSAGES UI (FR/EN/SV)
+  // ─────────────────────────────────────────────────────────
+  let messagesInterface = {
+    "Français": {
+      btnPDF:"Exportera PDF", btnCopy:"Kopiera", btnClose:"Slutför",
+      menuTitle:"Sélectionner Questionnaire et Langue",
+      labelQuestionnaire:"Questionnaire :",
+      labelLangue:"Langue :",
+      continuer:"Continuer",
+      intro:"Ce questionnaire est anonyme et vous aide à évaluer votre bien-être mental.",
+      codeLabel:"Entrez maintenant un code de votre choix à 4 chiffres en le tapant sur le clavier",
+      start:"Commencer",
+      pause:"Pause", reprendre:"Reprendre",
+      microOff:"🎤 Micro fermé", microOn:"🎤 Micro actif",
+      summaryTitle:"Sammanfattning och korrigering", codeLabelSummary:"Formulärkod :",
+      errorCode:"Veuillez entrer un code à 5 chiffres valide.",
+      errorScale:"Entrez un chiffre de 1 à 5 : 1=jamais, 2=rarement, 3=parfois, 4=souvent, 5=très souvent",
+      ttsOn:"Vocal", ttsOff:"Silence",
+      btnPDF:"Exportera PDF", btnCopy:"Kopiera", btnClose:"Slutför",
+      promptFilename:"Entrez un nom de fichier (.txt)",
+      defaultFilename:"Réponses_Questionnaire_",
+      valider:"Valider", corriger:"Corriger",
+      alertOption:"Option non installée, reprenez la 1ère option",
+      alertSaved:"Vos réponses ont été enregistrées.",
+      sectionLabel: "Section",
+     questionLabel: "Question",
+     introTitle: "Introduction",
+      programme:"Programme",
+      language:"Langue",
+      globalCommentPlacehoder: "votre commentaire global",
+      alertRewrite:"Réécrivez votre réponse"},
+    "English": {
+      btnPDF:"Export PDF", btnCopy:"Copy", btnClose:"Finish",
+      menuTitle:"Select Questionnaire and Language",
+      labelQuestionnaire:"Questionnaire:", labelLangue:"Language:",
+      continuer:"Continue", intro:"This questionnaire is anonymous.",
+      codeLabel:"Enter your 4-digit code:", start:"Start",
+      pause:"Pause", reprendre:"Resume",
+      microOff:"🎤 Micro off", microOn:"🎤 Micro on",
+      summaryTitle:"Summary and correction", codeLabelSummary:"Questionnaire code:",
+      errorCode:"Please enter a valid 5-digit code.",
+      errorScale:"After your answer, enter a number 1–5:1=never, 2=rarely, 3=sometimes, 4=often, 5=very often",
+      ttsOn:"Voice", ttsOff:"Silence",
+      btnPDF:"Export PDF", btnCopy:"Copy", btnClose:"Finish",
+      promptFilename:"Enter a filename (.txt)",
+      defaultFilename:"Questionnaire_Answers_",
+      valider:"Validate", corriger:"Correct",
+      alertOption:"Option not installed, please select the first option.",
+      alertSaved:"Your responses have been saved.",
+      sectionLabel: "Section",
+      questionLabel: "Question",
+      introTitle: "Introduction",
+      programme:"Program",
+      language:"Language",
+      globalCommentPlaceholder: "Your overall comment…",
+      alertRewrite:"Rewrite your answer"},
+    "Svenska": {
+      btnPDF:"Exportera PDF", btnCopy:"Kopiera", btnClose:"Avsluta",
+      menuTitle:"Välj formulär och språk",
+      labelQuestionnaire:"Formulär:", labelLangue:"Språk:",
+      continuer:"Fortsätt", intro:"Detta formulär är anonymt.",
+      codeLabel:"Ange din fyrsiffriga kod:", start:"Starta",
+      pause:"Paus", reprendre:"Återuppta",
+      microOff:"🎤 Mikrofon av", microOn:"🎤 Mikrofon på",
+      summaryTitle:"Sammanfattning och korrigering", codeLabelSummary:"Formulärkod:",
+      errorCode:"Ange en giltig femsiffrig kod.",
+      errorScale:"Ange en siffra: 1=aldrig, 2=sällan, 3=ibland, 4=ofta, 5=mycket ofta",
+      ttsOn:"Röst", ttsOff:"Tyst",
+      btnPDF:"Exportera PDF", btnCopy:"Kopiera", btnClose:"Avsluta",
+      promptFilename:"Ange ett filnamn (.txt)",
+      defaultFilename:"Formulär_Svar_",
+      valider:"Bekräfta", corriger:"Korrigera",
+      alertOption:"Alternativet är inte installerat, välj det första alternativet.",
+      alertSaved:"Dina svar har sparats." ,
+      sectionLabel: "Sektion",
+      questionLabel: "Fråga",
+      introTitle: "Introduktion",
+      programme:"Program",
+      language:"Språk",
+      globalCommentPlaceholder: "Din allmänna kommentar…",
+      alertRewrite:"Skriv om ditt svar"}
+};  // <= fin de messagesInterface
+ window.messagesInterface = messagesInterface; // ← on l’attache à window
+// Texte d'instructions par langue (bandeau jaune)
+window.instructionTextByLang = {
+  'Français': 'Au clavier <span>RETOUR</span>, en vocal dire <span>STOP</span>',
+  'English' : 'On keyboard press <span>ENTER</span>, by voice say <span>STOP</span>',
+  'Svenska' : 'På tangentbordet tryck <span>RETUR</span>, med röst säg <span>SLUT</span>'
+};
+function refreshInstructionBanner(){
+  const ib = document.getElementById('instructionBox');
+  if (!ib) return;
+  const m = (window.messagesInterface && window.messagesInterface[currentLang]) || window.messagesInterface['Français'];
+  const instr = (window.instructionTextByLang && window.instructionTextByLang[currentLang]) || window.instructionTextByLang['Français'];
+  const microText = (typeof listening !== 'undefined' && listening) ? m.microOn : m.microOff;
+  ib.innerHTML = instr + ' <span id="microStatus">' + microText + '</span>';
+}
+  // ─────────────────────────────────────────────────────────
+  // ÉTAT GLOBAL
+  // ─────────────────────────────────────────────────────────
+  let userCode = "", currentQuestion = 0;
+  let answers = [];
+  let paused = false, recognition = null, listening = false;
+  let isValidating = false;
+  let ttsEnabled = true;
+  let currentLang = "Svenska";
+  let justCorrected = false;
+  const isMobile = /Android|iPhone|iPad|iPod|SamsungBrowser/i.test(navigator.userAgent);
+  const mapChiffres = { "un":"1","une":"1","deux":"2","trois":"3","quatre":"4","one":"1","two":"2","three":"3","four":"4","ett":"1","två":"2","tva":"2","tre":"3","fyra":"4" };
+  // ─────────────────────────────────────────────────────────
+  // PRÉPARATION DES SECTIONS / SKIP
+  // ─────────────────────────────────────────────────────────
+  function preparerQuestions(arr, sectionsSkip){
+    let courant = null;
+    arr.forEach((q, idx) => {
+      if (typeof q.section !== "undefined") courant = q.section;
+      else if (courant !== null)          q.section = courant;
+      else                                q.section = 0;
+      if (sectionsSkip.includes(q.section)){
+        if (idx === 0 || arr[idx-1].section !== q.section) q.skipIfNon = true;
+      }
+    });
+  }
+
+
+  // ─────────────────────────────────────────────────────────
+  // OUTILS UI
+  function showNoSpeech(){
+    const txt = (messagesInterface && messagesInterface[currentLang] && messagesInterface[currentLang].noSpeech) || "🎤 Pas de voix détectée";
+    const ms  = document.getElementById("microStatus");
+    if (ms){ ms.textContent = txt; ms.style.color = "orange"; }
+    const err = document.getElementById("mainErrorMsg") || document.getElementById("menuError");
+    if (err) err.textContent = txt;
+  }
+  // ─────────────────────────────────────────────────────────
+  function jouerBipErreur(){
+    try{
+      const c=new (window.AudioContext||window.webkitAudioContext)();
+      const o=c.createOscillator(); const g=c.createGain();
+      o.type="sine"; o.frequency.value=440; g.gain.value=.1;
+      o.connect(g); g.connect(c.destination);
+      o.start(); o.stop(c.currentTime+.25);
+    }catch(_){}
+  }
+  function updateProgress(){
+    document.getElementById("progressBar").style.width = ((currentQuestion/questions.length)*100)+"%";
+  }
+  function updateTTSBtn(){
+  var b = document.getElementById('ttsToggleBtn');
+  if(!b) return;
+  var enabled = (typeof window.ttsEnabled === 'boolean') ? window.ttsEnabled : false;
+  try{
+    b.textContent = enabled ? messagesInterface[currentLang].ttsOn : messagesInterface[currentLang].ttsOff;
+    b.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  }catch(_){
+    try{ b.textContent = enabled ? 'Voice' : 'Silence'; }catch(__){}
+  }
+}
+
+  function updateQuestionnaireLabels(){
+    try{
+      const sel=document.getElementById('questionnaireSelect'); if(!sel) return;
+      const map = {
+        'Français': { DSM:'DSM-5', Sommeil:'Sommeil', Psych:'Psych', Neurology:'Neurologie', MedGle:'Med Gle' },
+        'English' : { DSM:'DSM-5', Sommeil:'Sleep',   Psych:'Psych', Neurology:'Neurology', MedGle:'GP' },
+        'Svenska' : { DSM:'DSM-5', Sommeil:'Sömn',    Psych:'Psych', Neurology:'Neurologi', MedGle:'Allmänt Med' }
+      }[currentLang] || {};
+      for (let i=0;i<sel.options.length;i++){
+        const o=sel.options[i]; const v=(o.value||'').trim();
+        if(map[v]) o.text = map[v] + (disabledForms.includes(v) ? " (" + messagesInterface[currentLang].unavailable + ")" : "");
+      }
+    }catch(_){}
+  }
+  // ─────────────────────────────────────────────────────────
+  // AJOUT : mettre à jour tous les libellés selon la langue (UpdateInterfaceLangue)
+  // ─────────────────────────────────────────────────────────
+  function updateInterfaceLang() {
+document.documentElement.setAttribute(
+  "lang",
+  ({ Svenska: "sv", Français: "fr", English: "en" }[currentLang]) || "en"
+);
+    const m = (messagesInterface && messagesInterface[currentLang]) || messagesInterface["Français"];
+    refreshInstructionBanner();
+// ... à la fin de updateInterfaceLang()
+try { onUILanguageChanged(); } catch(_){}
+    // Accueil
+     // Titre de la page d'intro (h2)
+const introH2 = document.querySelector('#introScreen h2');
+if (introH2) introH2.textContent = m.introTitle || 'Introduction';
+    const h2 = document.querySelector('#menuScreen h2'); if (h2) h2.textContent = m.menuTitle;
+    const labQ = document.querySelector('label[for="questionnaireSelect"]'); if (labQ) labQ.textContent = m.labelQuestionnaire;
+    const labL = document.querySelector('label[for="langSelect"]'); if (labL) labL.textContent = m.labelLangue;
+    const nextBtn = document.getElementById("nextLangBtn"); if (nextBtn) nextBtn.textContent = m.continuer;
+    // Intro
+    const lblCode = document.getElementById("labelCode"); if (lblCode) lblCode.textContent = m.codeLabel;
+    const startBtn = document.getElementById("startBtn"); if (startBtn) startBtn.textContent = m.start;
+    const introP = document.getElementById("introText"); if (introP && introP.textContent.trim()==="") introP.textContent = m.intro;
+    // Main
+    const validerBtn = document.getElementById("validerBtn"); if (validerBtn) validerBtn.textContent = m.valider;
+    const corrigerBtn = document.getElementById("corrigerBtn"); if (corrigerBtn) corrigerBtn.textContent = m.corriger;
+    const pauseBtn = document.getElementById("pauseBtn"); if (pauseBtn) pauseBtn.textContent = m.pause;
+    // TTS + micro
+    updateTTSBtn();
+    const voiceBtn = document.getElementById("voiceBtn");
+    if (voiceBtn) voiceBtn.textContent = (typeof listening!=="undefined" && listening) ? m.microOn : m.microOff;
+    // fin
+    const globalComment = document.getElementById("globalComment");
+    if (globalComment) globalComment.placeholder = m.globalCommentPlaceholder || "";
+    // fin
+    const sendBtn = document.getElementById("sendToCodicentBtn");
+    if (sendBtn) sendBtn.textContent = m.sendForAnalysis || "Send for analysis";
+    // Bouton d'envoi (i18n)
+    localizeSendButton();
+  // Force Swedish label if active language is Svenska
+  try {
+    var sbf = document.getElementById('sendToCodicentBtn');
+    if (sbf && currentLang === 'Svenska') {
+      sbf.textContent = "Skicka för analys";
+    }
+  } catch(_){}
+    // Titre
+    updateHeaderBar();
+  // Force Swedish label if active language is Svenska
+  try {
+    var sbf = document.getElementById('sendToCodicentBtn');
+    if (sbf && currentLang === 'Svenska') {
+      sbf.textContent = "Skicka för analys";
+    }
+  } catch(_){}
+  }
+  // ─────────────────────────────────────────────────────────
+  // TTS
+  // ─────────────────────────────────────────────────────────
+// ===== TTS — bloc unique (PC / Samsung) =====
+// Une seule déclaration dans tout le fichier :
+var TTS_STORE_KEY = "ttsVoiceNameByLangCode";
+var ttsVoiceNameByLang = {};
+// 1) Langue courante -> code normalisé via window.currentLang ("Svenska"/"Français"/"English")
+function getCurrentLangCode(){
+  var txt = (window.currentLang || "").toLowerCase();
+  if (txt.includes("sv")) return "sv-SE";
+  if (txt.includes("en")) return "en-US";
+  if (txt.includes("fr")) return "fr-FR";
+  return "fr-FR";
+}
+// 2) Store
+(function(){
+  try{ ttsVoiceNameByLang = JSON.parse(localStorage.getItem(TTS_STORE_KEY) || "{}"); }
+  catch(_){ ttsVoiceNameByLang = {}; }
+})();
+function tts_saveStore(){
+  try{ localStorage.setItem(TTS_STORE_KEY, JSON.stringify(ttsVoiceNameByLang)); }catch(_){}
+}
+// 5) Récup voix choisie
+function tts_getSelectedVoice(){
+  var sel = document.getElementById("voiceSelect");
+  var name = sel && sel.value;
+  return name ? (__voices||[]).find(v => v.name === name) || null : null;
+}
+// 6) Charger/rafraîchir les voix
+function tts_loadVoices(){
+  try{ __voices = synth ? (synth.getVoices() || []) : []; }catch(_){ __voices = []; }
+  if (typeof tts_populateVoiceSelect==='function'){ tts_populateVoiceSelect(); }
+}
+if (typeof speechSynthesis !== "undefined"){
+  setTimeout(tts_loadVoices, 0);
+  setTimeout(tts_loadVoices, 600); // Android/Chrome charge parfois en retard
+}
+// 7) Brancher l’UI + synchroniser currentLang avec le menu langue (id="langSelect")
+document.addEventListener("DOMContentLoaded", function(){
+  // sécurise currentLang au démarrage
+  window.currentLang = window.currentLang || "Français";
+  var langSelect = document.getElementById("langSelect"); // <-- donne cet id à ton menu Langue
+  if (langSelect){
+    // init
+    window.currentLang = langSelect.value || langSelect.options[langSelect.selectedIndex]?.text || window.currentLang;
+    onUILanguageChanged();
+    // changement
+    langSelect.addEventListener("change", function(){
+      window.currentLang = langSelect.value || langSelect.options[langSelect.selectedIndex]?.text || "Français";
+      onUILanguageChanged();
+    });
+  }
+  var sel = document.getElementById("voiceSelect");
+  if (sel){
+    sel.addEventListener("change", function(){
+      var key = getCurrentLangCode().substring(0,2).toUpperCase();
+      ttsVoiceNameByLang[key] = sel.value || "";
+      tts_saveStore();
+    });
+  }
+  var testBtn = document.getElementById("testVoiceBtn");
+  if (testBtn){
+    testBtn.addEventListener("click", function(){
+      var code = getCurrentLangCode();
+      var sample = code.startsWith("sv") ? "Det här är ett rösttest."
+                 : code.startsWith("en") ? "This is a voice test."
+                 : "Ceci est un test de voix.";
+      tts_testSpeak(sample);
+    });
+  }
+  // force un premier chargement
+  tts_loadVoices();
+});
+// 8) Test voix (débloque Android/Chrome)
+function tts_testSpeak(text){
+  if (!synth || !text) return;
+  try{
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = getCurrentLangCode();
+    var v = tts_getSelectedVoice(); if (v) u.voice = v;
+    u.rate = 1.0; u.pitch = 1.0;
+    synth.cancel(); synth.speak(u);
+  }catch(_){}
+}
+// 9) À appeler quand ta logique change window.currentLang
+function onUILanguageChanged(){
+  try { if (typeof tts_populateVoiceSelect==='function'){ tts_populateVoiceSelect(); } } catch(_){}
+}
+  // ─────────────────────────────────────────────────────────
+  // RECONNAISSANCE VOCALE (HTTPS, pas d’auto-start)
+  // ─────────────────────────────────────────────────────────
+  function setRecognitionLang(){
+    if(!recognition) return;
+    recognition.lang=(currentLang==="English")?"en-US":(currentLang==="Svenska")?"sv-SE":"fr-FR";
+  }
+  function initRecognition(){
+    window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const ms = document.getElementById("microStatus");
+    if(!window.SpeechRecognition){
+      if(ms) ms.textContent = (currentLang==="English")?"🎤 Not supported":"🎤 Non supporté";
+      return;
+    }
+    if(!window.isSecureContext && location.hostname!=="localhost"){
+      if(ms) ms.textContent=(currentLang==="English")?"🎤 HTTPS required":"🎤 HTTPS requis";
+      return;
+    }
+    recognition = new window.SpeechRecognition();
+    setRecognitionLang();
+    recognition.continuous=true; recognition.interimResults=false;
+    recognition.onstart = ()=>{
+      listening=true;
+      document.getElementById("microStatus").textContent=messagesInterface[currentLang].microOn;
+      document.getElementById("voiceBtn").textContent=messagesInterface[currentLang].microOn;
+      document.getElementById("microStatus").style.color="green";
+    };
+    recognition.onend   = ()=>{
+      listening=false;
+      document.getElementById("microStatus").textContent=messagesInterface[currentLang].microOff;
+      document.getElementById("voiceBtn").textContent=messagesInterface[currentLang].microOff;
+      document.getElementById("microStatus").style.color="red";
+    };
+    recognition.onerror = (e)=>{
+      listening=false;
+      const err = e && e.error;
+      if (err === "no-speech"){
+        showNoSpeech();
+      } else {
+        const ms = document.getElementById("microStatus");
+        if (ms){
+          let msg = "🎤 Erreur";
+          if (err==="not-allowed"||err==="service-not-allowed") msg = messagesInterface[currentLang].permDenied || "🎤 Behörighet nekad (activez le micro)";
+          else if (err==="audio-capture") msg = messagesInterface[currentLang].audioCapture || "🎤 Micro non détecté";
+          else if (err==="no-speech")     msg = messagesInterface[currentLang].noSpeech || "🎤 Pas de voix détectée";
+          ms.textContent = msg;
+        }
+      }
+      document.getElementById("voiceBtn").textContent=messagesInterface[currentLang].microOff;
+    };
+    recognition.onresult=(e)=>{
+      try{
+        let base = e.results[e.results.length-1];
+        if (!base || !base[0] || !base[0].transcript){ showNoSpeech(); return; }
+        let txt=String(base[0].transcript).toLowerCase().trim();
+        txt=txt.replace(/\b(un|une|deux|trois|quatre|one|two|three|four|ett|två|tva|tre|fyra)\b/g,m=>mapChiffres[m]||m);
+        if(txt.includes("stop")||txt.includes("slut")){
+          txt=txt.replace(/(?:stop|slut)/gi,"").trim();
+          document.getElementById("answerInput").value=txt;
+          validateAnswer();
+        }else{
+          document.getElementById("answerInput").value=txt;
+        }
+      }catch(_){}
+    };
+  }
+  /* (disabled by patch) original voiceBtn onclick was here */
+  // ─────────────────────────────────────────────────────────
+  // AFFICHAGE DE LA QUESTION COURANTE
+  // ─────────────────────────────────────────────────────────
+// ─── MODIF (GPT): reconnaissance d'un "NON" pour questions skip (inclut "1") ───
+function isNoForSkip(raw){
+  try{
+    const s = String(raw || "").trim().toLowerCase();
+    return /^(?:n|no|non|nej|nein|1)$/i.test(s);
+  }catch(_){ return false; }
+}
+function showQuestion(){
+  // --- Hard override: if a forced index is set, use it and clear the flag
+  if (typeof window.__forceIndex === 'number' && isFinite(window.__forceIndex)){
+    try{
+      var __fi = Math.max(0, Math.min(window.__forceIndex|0, (questions && questions.length ? questions.length-1 : 0)));
+      currentQuestion = __fi;
+    }catch(_){}
+    window.__forceIndex = null;
+  }
+
+  // couper le micro si actif
+if (recognition && listening){
+    try { recognition.abort(); } catch(_) { try { recognition.stop(); } catch(_){} }
+    listening = false;
+  }
+  // Sécurité : si plus de questions → résumé
+  if (!Array.isArray(questions) || currentQuestion >= questions.length){
+    if (typeof showSummary === "function") showSummary();
+    return;
+  }
+  const q = questions[currentQuestion] || {};
+  const m = (messagesInterface && messagesInterface[currentLang]) || messagesInterface["Français"];
+  const sectionEl = document.getElementById("sectionNum");
+  if (sectionEl) sectionEl.textContent = q.section ? `${m.sectionLabel} ${q.section}` : "";
+  const qNumEl = document.getElementById("questionNum");
+  if (qNumEl) qNumEl.textContent = `${m.questionLabel} ${(currentQuestion+1)}/${questions.length}`;
+  const qTextEl = document.getElementById("questionText");
+  if (qTextEl) qTextEl.innerHTML = q.text || "";
+  const errEl = document.getElementById("mainErrorMsg");
+  if (errEl) errEl.textContent = "";
+  const scoreBox = document.getElementById("scoreContainer");
+  if (scoreBox) scoreBox.style.display = "none";
+// nouvau bloc pour seulement reponses SCORE 1-5
+
+// === SCORE-ONLY (sections ≥3 + notables) : UI immédiate ===
+try{
+  const q = questions[currentQuestion] || {};
+const isQuant =
+  (q && q.type === "scale") ||
+  (q && Number(q.section) >= 3 && window.NOTABLES_SET && window.NOTABLES_SET.has(currentQuestion));
+const isMixed = (typeof MIXED_QUESTIONS !== "undefined") && MIXED_QUESTIONS.has(currentQuestion);
+if (isQuant && !isMixed) {
+  // libellé i18n pour le score
+  const lbl = document.getElementById("scoreLabel");
+  if (lbl){
+    let txt = messagesInterface[currentLang].errorScale;
+    // ─── MODIF (GPT): si la question fait partie des échelles verbales, changer le libellé ───
+    try{
+      if (typeof VERBAL_SCALE_QUESTIONS !== "undefined" && VERBAL_SCALE_QUESTIONS.has(currentQuestion)){
+      txt = (currentQuestion===29||currentQuestion===31) ? "Välj ett betyg 1–5: 1=dålig, 2=rättvis, 3=bra, 4=mycket bra, 5=utmärkt" : "Välj ett betyg 1–5: 1=inte alls, 2=kanske, 3=lite, 4=ganska mycket, 5=mycket";
+      }
+    }catch(_){}
+    lbl.textContent = txt;
+  }
+    // Cacher/désactiver le champ texte
+    const ta = document.getElementById("answerInput");
+    if (ta){ ta.value=""; ta.style.display="none"; ta.disabled=true; }
+    // Ouvrir l’échelle et focus
+    const sc = document.getElementById("scoreContainer"); if (sc){ sc.style.display="block"; sc.hidden=false; }
+    const si = document.getElementById("scoreInput");
+    if (si){
+      si.min="1"; si.max="5"; si.value="";
+      setTimeout(()=>{ try{ si.focus(); }catch(_){ } }, 80);
+      si.onkeypress = (e)=>{ if(e.key==="Enter"){ e.preventDefault(); document.getElementById("validateScoreBtn")?.click(); } };
+    }
+    // Rediriger Valider → OK (score)
+    const ok = document.getElementById("validateScoreBtn");
+    if (ok){
+      const clone = ok.cloneNode(true); ok.parentNode.replaceChild(clone, ok);
+      document.getElementById("validateScoreBtn").onclick = function(){
+        const v = Number((document.getElementById("scoreInput")||{}).value);
+        validateAnswer(v);
+      };
+    }
+    const mainBtn = document.getElementById("validerBtn");
+    if (mainBtn){
+      mainBtn.onclick = (e)=>{ e.preventDefault(); document.getElementById("validateScoreBtn")?.click(); };
+    }
+  }
+}catch(_){}
+
+// Fin du bloc SCORE seulement
+const f = document.getElementById("answerInput");
+if (f){
+  f.value = "";
+  const __q = questions[currentQuestion] || {};
+  const __isQuant =
+    (__q && __q.type === "scale") ||
+    (__q && Number(__q.section) >= 3 && window.NOTABLES_SET && window.NOTABLES_SET.has(currentQuestion));
+
+  // >>> FIX : ne pas cacher la zone texte si la question est en mode MIXTE
+  const __isMixed = (typeof window.MIXED_QUESTIONS !== "undefined") && window.MIXED_QUESTIONS.has(currentQuestion);
+
+  if (__isQuant && !__isMixed) {
+    // Score-only : on reste en mode score, champ texte caché
+    f.style.display = "none";
+    f.disabled = true;
+  } else {
+    // Questions ouvertes OU mixtes (texte puis score) : texte visible
+    f.style.display = "block";
+    f.disabled = false;
+    f.value = "";
+    setTimeout(()=>{ try{ f.focus(); }catch(_){ } }, 80);
+  }
+}
+
+  updateProgress();
+  // 🔁 Banderole (RETUR/AVSLUTA / micro on/off) selon la langue
+  if (typeof refreshInstructionBanner === "function") refreshInstructionBanner();
+  // TTS
+  if (typeof lireTexte === "function") lireTexte(q.text || "");
+}
+    // ❌ Pas d’auto-démarrage micro (évite re-prompts permission)
+    // setTimeout(()=>{ if(recognition && !paused && !isMobile){ recognition.start(); listening=true; }},1200);
+  // ─────────────────────────────────────────────────────────
+  // VALIDATION (attend correction + échelle + skip)
+  // ─────────────────────────────────────────────────────────
+  function validateAnswer(extraScore=null){
+    if (paused){ isValidating=false; return; }
+    { const _f=document.getElementById("answerInput"); const _r=((_f&&_f.value)||"").trim();
+      if (justCorrected && (!_r && !extraScore)){ isValidating=false; return; } }
+    if (isValidating) return; isValidating=true;
+    if (typeof questions[currentQuestion]==="undefined"){ isValidating=false; return; }
+    const f=document.getElementById("answerInput"); let r=(f.value||"").trim();
+// ── MIXTE: forced set (text → then 1–5 scale) ──
+try {
+  const __isForcedMixed = (function(){
+    const set = new Set([26,27,32,33,34,35,37]); // 0-based indices: Q27,Q28,Q33,Q34,Q35,Q36,Q38
+    let idx = -1;
+    if (typeof currentQuestion === 'number') idx = currentQuestion;
+    else {
+      try{
+        var el=document.getElementById('questionNum');
+        if(el){ var m=el.textContent.match(/(\d+)\s*\/\s*(\d+)/); if(m) idx=parseInt(m[1],10)-1; }
+      }catch(_){ idx = -1; }
+    }
+    return set.has(idx);
+  })();
+  if (__isForcedMixed) {if (extraScore === null) {
+      if (!r) {
+        isValidating = false;
+        const err = document.getElementById("mainErrorMsg");
+        if (err){ err.textContent = "⚠️ Skriv ett svar eller diktera SLUT"; setTimeout(()=>err.textContent="", 1800); }
+        return;
+      }
+      const sc = document.getElementById("scoreContainer");
+      const si = document.getElementById("scoreInput");
+      if (sc){ sc.style.display = "block"; sc.hidden = false; }
+      if (si){
+        si.min = "1"; si.max = "5"; si.value = "";
+        setTimeout(()=>{ try{ si.focus(); }catch(_){ } }, 60);
+        const onEnter = (e)=>{ if(e.key === "Enter"){ e.preventDefault(); document.getElementById("validateScoreBtn")?.click(); si.removeEventListener("keypress", onEnter); } };
+        si.addEventListener("keypress", onEnter);
+      }
+      const ok = document.getElementById("validateScoreBtn");
+      if (ok){
+        ok.replaceWith(ok.cloneNode(true));
+        document.getElementById("validateScoreBtn").onclick = function(){
+          const v = Number((document.getElementById("scoreInput")||{}).value);
+          validateAnswer(v);
+        };
+      }
+      isValidating = false;
+      return;
+    }
+    // Temps 2: on a un score -> continuer (option: concaténer au texte)
+    r = r ? (r + " - " + String(extraScore)) : String(extraScore);
+  }
+} catch(_) {}
+// ─── MODIF (GPT v3): SkipIfNon robuste + reset UI ───
+try{
+  const qSK = questions[currentQuestion] || {};
+  const a_txt = (r||"").trim().toLowerCase();
+  const a_num = (extraScore!==null && extraScore!==undefined) ? Number(extraScore) : null;
+  if (qSK && qSK.skipIfNon && ( (typeof isNoForSkip==="function" && isNoForSkip(a_txt)) || a_num === 1 )){
+    answers[currentQuestion] = r || (a_num!=null ? String(a_num) : "(sans réponse)");
+    const sectionActuelle__ = qSK.section;
+    let next__ = currentQuestion + 1;
+    while(next__ < questions.length && questions[next__].section === sectionActuelle__) next__++;
+    const tSkip__ = Math.max(
+      config.tempsBaseReponse + (r ? r.length : 0)*config.tempsParCaractere,
+      (config.minDelaySkip || 1200)
+    );
+    // Reset now to avoid stuck state, then jump after delay
+    try{
+      isValidating=false; paused=false;
+      const sc = document.getElementById("scoreContainer"); if (sc){ sc.style.display="none"; sc.hidden=true; }
+      const si = document.getElementById("scoreInput"); if (si){ si.value=""; si.disabled=false; si.style.display=""; }
+      const ta = document.getElementById("answerInput"); if (ta){ ta.disabled=false; ta.style.display=""; }
+      document.getElementById("mainErrorMsg").textContent="";
+    }catch(_){}
+    setTimeout(()=>{
+      if(justCorrected){ isValidating=false; return; }
+      currentQuestion = next__;
+      if (currentQuestion < questions.length) showQuestion(); else showSummary();
+    }, tSkip__);
+    return;
+  }
+}catch(_){}
+// ─── MODIF (GPT): SkipIfNon robuste (texte "1" OU extraScore==1), avant toute autre logique ───
+try{
+  const qSK = questions[currentQuestion] || {};
+  const a_txt = (r||"").trim().toLowerCase();
+  const a_num = (extraScore!==null && extraScore!==undefined) ? Number(extraScore) : null;
+  if (qSK && qSK.skipIfNon && ( (typeof isNoForSkip==="function" && isNoForSkip(a_txt)) || a_num === 1 )){
+    answers[currentQuestion] = r || (a_num!=null ? String(a_num) : "(sans réponse)");
+    const sectionActuelle__ = qSK.section;
+    let next__ = currentQuestion + 1;
+    while(next__ < questions.length && questions[next__].section === sectionActuelle__) next__++;
+    const tSkip__ = Math.max(
+      config.tempsBaseReponse + (r ? r.length : 0)*config.tempsParCaractere,
+      (config.minDelaySkip || 1200)
+    );
+    setTimeout(()=>{
+      if(justCorrected){ isValidating=false; return; }
+      currentQuestion = next__;
+      if (currentQuestion < questions.length) showQuestion(); else showSummary();
+    }, tSkip__);
+    return;
+  }
+}catch(_){}
+if (justCorrected && (!r && !extraScore)){ isValidating=false; return; }
+    justCorrected=false;
+// Changement pour seulement reponses SCORE 1-5
+    //if (!r && !extraScore){
+    //  isValidating=false;
+    //  document.getElementById("mainErrorMsg").textContent="⚠️ Skriv ett svar eller //diktera SLUT";
+     // setTimeout(()=>document.getElementById("mainErrorMsg").textContent="",2000);
+     // return;
+    //}
+if (!r && !extraScore){
+  const q = questions[currentQuestion] || {};
+  const isQuant = q && Number(q.section) >= 3 && window.NOTABLES_SET && window.NOTABLES_SET.has(currentQuestion);
+  if (isQuant){
+    // Ouvrir l’échelle 1–5 immédiatement (pas de texte requis)
+    const sc = document.getElementById("scoreContainer"); if (sc){ sc.style.display="block"; sc.hidden=false; }
+    const si = document.getElementById("scoreInput");
+    if (si){
+      si.min="1"; si.max="5"; si.value="";
+      setTimeout(()=>{ try{ si.focus(); }catch(_){ } }, 80);
+      si.onkeypress = (e)=>{ if(e.key==="Enter"){ e.preventDefault(); document.getElementById("validateScoreBtn")?.click(); } };
+    }
+    // Valider/Entrée → OK
+    const ok = document.getElementById("validateScoreBtn");
+    if (ok){
+      const clone = ok.cloneNode(true); ok.parentNode.replaceChild(clone, ok);
+      document.getElementById("validateScoreBtn").onclick = function(){
+        const v = Number((document.getElementById("scoreInput")||{}).value);
+        validateAnswer(v);
+      };
+    }
+    // Cacher/désactiver la zone texte
+    const ta = document.getElementById("answerInput");
+    if (ta){ ta.value=""; ta.style.display="none"; ta.disabled=true; }
+    isValidating=false;
+    return; // en quantitatif, on n’exige PAS de texte
+  }
+  // Non-quantitatif → logique d’origine
+  isValidating=false;
+  document.getElementById("mainErrorMsg").textContent="⚠️ Skriv ett svar eller diktera SLUT";
+  setTimeout(()=>document.getElementById("mainErrorMsg").textContent="",2000);
+  return;
+}
+// fin du changement
+// ─── MODIF (GPT): Skip NON (incl. "1") pour questions textuelles avec skipIfNon ───
+try{
+  const q__ = questions[currentQuestion] || {};
+  const lowerResp__ = (r||"").toLowerCase();
+  // Détecte "NON" (inclut "1") et saute toute la section si la question est skipIfNon et pas "scale"
+  if (q__ && q__.skipIfNon && q__.type !== "scale" && isNoForSkip(lowerResp__)){
+    answers[currentQuestion]=r||"(sans réponse)";
+    const sectionActuelle__ = q__.section;
+    let next__ = currentQuestion + 1;
+    while(next__ < questions.length && questions[next__].section === sectionActuelle__) next__++;
+    const tSkip__ = Math.max(
+      config.tempsBaseReponse + r.length*config.tempsParCaractere,
+      (config.minDelaySkip || 1200)
+    );
+    setTimeout(()=>{
+      if(justCorrected){ isValidating=false; return; }
+      currentQuestion = next__;
+      if (currentQuestion < questions.length) showQuestion(); else showSummary();
+    }, tSkip__);
+    return;
+  }
+}catch(_){}
+if (questions[currentQuestion].type==="scale"){
+      const lowerResp=r.toLowerCase();
+      // Skip section si 1re question est "non/no/nej"
+      if (questions[currentQuestion].skipIfNon && (/(^|\b)(non|no|nej|n|1)(\b|$)/i).test(lowerResp)){
+        answers[currentQuestion]=r||"(sans réponse)";
+        const sectionActuelle=questions[currentQuestion].section;
+        let next=currentQuestion+1;
+        while(next<questions.length && questions[next].section===sectionActuelle) next++;
+const tSkip = Math.max(
+  config.tempsBaseReponse + r.length*config.tempsParCaractere,
+  config.minDelaySkip
+);
+        setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion=next; isValidating=false; if(currentQuestion<questions.length) showQuestion(); else showSummary(); }, tSkip);
+        return;
+      }
+      // "non" simple -> avancer
+      if ((/(^|\b)(non|no|nej|n|1)(\b|$)/i).test(lowerResp)){
+        answers[currentQuestion]=r||"(sans réponse)";
+        let t=Math.min(config.tempsBaseReponse + r.length*config.tempsParCaractere, config.tempsMaxReponse);
+     // Temps d'attente apres RETOUR avant de passer a la question suivante pour donner le temps de corriger ici 2000 = 2 sec 
+	//t=Math.max(t,2000);
+      t = Math.max(t, config.minDelayNo);
+        setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion++; isValidating=false; if(currentQuestion<questions.length) showQuestion(); else showSummary(); }, t);
+        return;
+      }
+      // Demander score si absent
+      let score=extraScore;
+      if(!score){
+        const sc=document.getElementById("scoreContainer"); sc.style.display="block";
+(function(){
+  var lblEl = document.getElementById("scoreLabel");
+  var txt = (messagesInterface && messagesInterface[currentLang] ? messagesInterface[currentLang].errorScale : "");
+  // ─── MODIF (GPT): libellé spécial pour les questions à échelle verbale ───
+  try{
+    if (typeof VERBAL_SCALE_QUESTIONS !== "undefined" && VERBAL_SCALE_QUESTIONS.has(currentQuestion)){
+      txt = (currentQuestion===29||currentQuestion===31) ? "Välj ett betyg 1–5: 1=dålig, 2=rättvis, 3=bra, 4=mycket bra, 5=utmärkt" : "Välj ett betyg 1–5: 1=inte alls, 2=kanske, 3=lite, 4=ganska mycket, 5=mycket";
+    }
+  }catch(_){}
+  if (lblEl) lblEl.textContent = txt;
+        try{ __applySwedishLabelsForCurrent(); }catch(_){}
+})();
+document.getElementById("mainErrorMsg").textContent="";
+        const scoreInput=document.getElementById("scoreInput");
+        scoreInput.min="1"; scoreInput.max="5"; scoreInput.value="";
+        setTimeout(()=>scoreInput.focus(),100);
+        const handler=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); document.getElementById("validateScoreBtn").click(); scoreInput.removeEventListener("keypress",handler);} };
+        scoreInput.addEventListener("keypress",handler);
+        if (recognition && listening){
+          recognition.onresult=(e)=>{
+            let txt=e.results[e.results.length-1][0].transcript.toLowerCase().trim();
+            txt=txt.replace(/\b(un|une|deux|trois|quatre|one|two|three|four|ett|två|tva|tre|fyra)\b/g,m=>mapChiffres[m]||m);
+            if (/(?:stop|slut)/.test(txt)){
+              let chiffre=txt.replace(/(?:stop|slut)/gi,"").trim();
+              if(chiffre && !isNaN(chiffre) && chiffre>=1 && chiffre<=5){ document.getElementById("scoreInput").value=chiffre; document.getElementById("validateScoreBtn").click(); }
+            }
+          };
+        }
+        const btn=document.getElementById("validateScoreBtn");
+        btn.replaceWith(btn.cloneNode(true)); // reset listeners
+        document.getElementById("validateScoreBtn").onclick=()=>{
+          const entered=document.getElementById("scoreInput").value;
+//     Erreur si notable <1 ou > 5
+          if(!entered || isNaN(entered) || entered<1 || entered>5){
+            jouerBipErreur();
+            try{ document.getElementById("scoreInput").style.borderColor="red"; setTimeout(()=>{ document.getElementById("scoreInput").style.borderColor=""; },600);}catch(_){}
+            return;
+          }
+          document.getElementById("scoreContainer").style.display="none";
+          validateAnswer(entered);
+        };
+        isValidating=false; return;
+      }
+      r = r ? (r+" - "+score) : score;
+    }
+    answers[currentQuestion]=r||"(sans réponse)";
+    let t=Math.min(config.tempsBaseReponse + r.length*config.tempsParCaractere, config.tempsMaxReponse);
+t = Math.max(t, config.minDelayDefault);
+    setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion++; isValidating=false; if(currentQuestion<questions.length) showQuestion(); else showSummary(); }, t);
+  }
+  // ─────────────────────────────────────────────────────────
+  // BOUTONS (valider, corriger, pause, export)
+  // ─────────────────────────────────────────────────────────
+  document.getElementById("validerBtn").onclick = validateAnswer;
+  document.getElementById("answerInput").addEventListener("keydown", e=>{
+    if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); validateAnswer(); }
+  });
+  document.getElementById("corrigerBtn").onclick = ()=>{
+    const f=document.getElementById("answerInput"); f.value="";
+    const sc=document.getElementById("scoreContainer"); if(sc){ sc.style.display="none"; document.getElementById("scoreInput").value=""; }
+    if (recognition && listening){ try{ recognition.abort(); }catch(_){ recognition.stop(); } listening=false; }
+    justCorrected=true; setTimeout(()=>f.focus(),100);
+    const err=document.getElementById("mainErrorMsg"); err.textContent=(messagesInterface[currentLang] && messagesInterface[currentLang].alertRewrite) || "Réécrivez votre réponse"; setTimeout(()=>err.textContent="",4000);
+  };
+  document.getElementById("pauseBtn").onclick = ()=>{
+    if(!paused){
+      localStorage.setItem("QSM_"+userCode, JSON.stringify({answers,currentQuestion}));
+      document.getElementById("pauseBtn").textContent = messagesInterface[currentLang].reprendre;
+      paused=true; if(recognition && listening){ try{ recognition.abort(); }catch(_){ recognition.stop(); } listening=false; }
+    }else{
+      paused=false; document.getElementById("pauseBtn").textContent = messagesInterface[currentLang].pause;
+      const saved=localStorage.getItem("QSM_"+userCode);
+      if(saved){ const d=JSON.parse(saved); answers=d.answers||[]; currentQuestion=d.currentQuestion||0; }
+      showQuestion();
+    }
+  };
+  function showSummary(){
+    document.getElementById("main").style.display="none";
+    document.getElementById("summary").style.display="block";
+    document.getElementById("resumeCode").textContent=userCode;
+    const ul=document.getElementById("answersList"); ul.innerHTML="";
+    questions.forEach((q,i)=>{
+      const li=document.createElement("li");
+      li.innerHTML=`<b>${q.text}</b><br><textarea class='editable' onchange='answers[${i}]=this.value'>${answers[i]||''}</textarea>`;
+      ul.appendChild(li);
+    });
+    lireTexte(messagesInterface[currentLang].summaryTitle);
+    // i18n right after summary appears
+    setSendBtnLabel();
+    setTimeout(setSendBtnLabel, 50);
+    setTimeout(setSendBtnLabel, 200);
+// Localize Codicent send button when summary becomes visible
+    try {
+      const m = (window.messagesInterface && window.messagesInterface[currentLang]) || {};
+      const sendBtn = document.getElementById("sendToCodicentBtn");
+      if (sendBtn) sendBtn.textContent = m.sendForAnalysis || "Send for analysis";
+    } catch(_) {}
+}
+  document.getElementById("pdfBtn").onclick=()=>{
+    let txt="Code: "+userCode+"\n";
+    questions.forEach((q,i)=>{ txt+=`${i+1}. ${q.text}\nRéponse: ${answers[i]||''}\n\n`; });
+    const w=window.open('','_blank'); if(w){ w.document.write('<pre>'+txt+'</pre>'); w.print(); }
+  };
+// terminer: demande de nom de fichier et sauvegarde
+  document.getElementById("copyBtn").onclick=()=>{
+    let txt="Code: "+userCode+"\n";
+    questions.forEach((q,i)=>{ txt+=`${i+1}. ${q.text}: ${answers[i]||''}\n`; });
+    const blob=new Blob([txt],{type:'text/plain'});
+    const link=document.createElement('a'); link.href=URL.createObjectURL(blob); link.download="Réponses_Questionnaire_"+userCode+".txt"; link.click();
+  };
+// -----------------------
+// AVSLUTA
+document.getElementById("closeBtn").onclick = () => {
+  const filename = prompt(
+    messagesInterface[currentLang].promptFilename,
+    (messagesInterface[currentLang].defaultFilename || "Formulär_Svar_") + userCode + ".txt"
+  );
+  if (!filename) return;
+  // 1) Construire le contenu
+  let txt = "Code: " + userCode + "\n";
+  questions.forEach((q, i) => {
+    txt += `${i + 1}. ${q.text}\nRéponse: ${answers[i] || ""}\n\n`;
+  });
+  // 2) Télécharger le .txt
+  const blob = new Blob([txt], { type: "text/plain" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+  // 3) Écran final + ENTER pour fermer (SV/FR/EN)
+const finalLang   = (["Svenska","Français","English"].includes(currentLang)) ? currentLang : "English";
+const finalFolder = { Svenska: "Hämtade filer", Français: "Téléchargements", English: "Downloads" }[finalLang];
+const finalTexts  = {
+  Svenska: {
+    screen: `Tack! Dina svar har sparats i mappen ${finalFolder}.<br><br>Du kan nu stänga fönstret.`,
+    hint:   'Tryck RETUR för att stänga fliken.',
+    block:  'Automatisk stängning blockerad. Tryck Ctrl+W (Cmd+W på Mac) eller Alt+F4.'
+  },
+  Français: {
+    screen: `Merci ! Vos réponses ont été enregistrées dans le dossier ${finalFolder}.<br><br>Vous pouvez maintenant fermer la fenêtre.`,
+    hint:   'Appuyez sur ENTRÉE pour fermer l’onglet.',
+    block:  'Fermeture auto bloquée. Appuyez sur Ctrl+W (Cmd+W sur Mac) ou Alt+F4.'
+  },
+  English: {
+    screen: `Thanks! Your answers have been saved in the ${finalFolder} folder.<br><br>You can now close this window.`,
+    hint:   'Press ENTER to close the tab.',
+    block:  'Auto-close blocked. Press Ctrl+W (Cmd+W on Mac) or Alt+F4.'
+  }
+}[finalLang];
+// Rendu de l’écran final
+document.body.innerHTML = `
+  <div id="finalScreen" style="text-align:center; margin-top:50px; font-size:1.5em;">
+    ${finalTexts.screen}
+    <div id="closeHint" style="margin-top:16px; font-size:1rem; opacity:.8;">${finalTexts.hint}</div>
+  </div>
+`;
+// Détection “ouvert par script” ou via lanceur (optionnel: ?spawned=1)
+const spawned = (() => {
+  try { return new URLSearchParams(location.search).get('spawned') === '1'; } catch(_) { return false; }
+})();
+// Tentative de fermeture
+function attemptCloseOnce(){
+  try {
+    // Cas OK: fenêtre enfant ouverte par script (ou marquée spawned)
+    if ((window.opener && !window.opener.closed) || spawned) { window.close(); return true; }
+    // Cas navigation interne: revenir en arrière
+    if (history.length > 1) { history.back(); return true; }
+    // Dernier essai (souvent bloqué)
+    window.open('', '_self'); window.close();
+  } catch(_) {}
+  return false;
+}
+// ENTER / NUMPAD-ENTER — feedback immédiat si bloqué
+function onCloseKey(e){
+  const k = e.key;
+  if (k !== 'Enter' && k !== 'NumpadEnter') return;
+  e.preventDefault();
+  const ok = attemptCloseOnce();
+  if (!ok) {
+    const hint = document.getElementById('closeHint');
+    if (hint) {
+      hint.textContent = finalTexts.block;
+      hint.style.opacity = '1';
+      hint.style.fontWeight = '700';
+    }
+  }
+}
+document.addEventListener('keydown', onCloseKey, { capture: true });
+// Click sur l’écran final: même logique (fermer ou afficher l’instruction)
+document.getElementById('finalScreen').addEventListener('click', () => {
+  const ok = attemptCloseOnce();
+  if (!ok) {
+    const hint = document.getElementById('closeHint');
+    if (hint) {
+      hint.textContent = finalTexts.block;
+      hint.style.opacity = '1';
+      hint.style.fontWeight = '700';
+    }
+  }
+}, { once: false });
+}; // <-- FIN de closeBtn.onclick
+// --------------------------
+  /* Ensure Codicent button exists */
+  document.addEventListener('DOMContentLoaded', function(){
+    try{
+      var summary = document.getElementById('summary');
+      if (!summary) return;
+      var btn = document.getElementById('sendToCodicentBtn');
+      var pdfBtn = document.getElementById('pdfBtn');
+      if (!btn && pdfBtn){
+        btn = document.createElement('button');
+        btn.id = 'sendToCodicentBtn';
+        // Default label; will be localized by updateInterfaceLang if present
+        var m = (window.messagesInterface && window.messagesInterface[window.currentLang]) || {};
+        btn.textContent = (m && m.sendForAnalysis) || 'Send for analysis';
+        pdfBtn.insertAdjacentElement('afterend', btn);
+      }
+      var status = document.getElementById('codicentStatus');
+      if (!status){
+        status = document.createElement('div');
+        status.id = 'codicentStatus';
+        status.style.display = 'none';
+        status.style.marginTop = '8px';
+        status.style.fontWeight = '600';
+        (btn || pdfBtn).insertAdjacentElement('afterend', status);
+      }
+    }catch(e){ console.warn('Codicent button ensure failed:', e); }
+  });
+  // === Helper: localize the Codicent send button according to currentLang ===
+  function localizeSendButton(){
+    try{
+      var m = (window.messagesInterface && window.messagesInterface[currentLang]) || {};
+      var sb = document.getElementById('sendToCodicentBtn');
+      if (sb) sb.textContent = (m && m.sendForAnalysis) || 'Send for analysis';
+    }catch(_){}
+  }
+  // Strong i18n setter for the Codicent send button (with fallbacks)
+  function setSendBtnLabel(){
+    try{
+      var L = window.currentLang || 'Français';
+      var m = (window.messagesInterface && window.messagesInterface[L]) || {};
+      var b = document.getElementById('sendToCodicentBtn');
+      if (!b) return;
+      var fallback = (L==='Svenska') ? 'Skicka för analys' : (L==='Français' ? 'Envoyer pour analyse' : 'Send for analysis');
+      b.textContent = m.sendForAnalysis || fallback;
+    }catch(_){}
+  }
+  // === CODICENT – Token, préparation du contenu et envoi ===
+  // Récupère le token depuis l'URL (?token=...)
+  function getCodicentToken(){
+    try{
+      const p = new URLSearchParams(location.search);
+      return p.get('token') || null;
+    }catch(_){ return null; }
+  }
+  // Construit le message à envoyer (Q/R + code + commentaire)
+  function prepareMessageContent(){
+    let content = `Form Data:
+`;
+    const formCode = document.getElementById('codeInput')?.value || userCode || "";
+    if (formCode) content += `Code: ${formCode}
+`;
+    (questions || []).forEach((q, i) => {
+      content += `${i+1}. ${q.text || ""}
+`;
+      content += `Answer: ${answers[i] || ""}
+`;
+    });
+    const globalComment = document.getElementById('globalComment')?.value?.trim();
+    if (globalComment) content += `Comments: ${globalComment}
+`;
+    // Tag projet (à adapter si nécessaire)
+    return `@swedsleep_demo #profile ${content}`;
+  }
+  // Gestion du clic sur le bouton "Envoyer pour analyse"
+  document.addEventListener('DOMContentLoaded', function(){
+    const btn = document.getElementById('sendToCodicentBtn');
+    const statusDiv = document.getElementById('codicentStatus');
+    if (!btn) return;
+    btn.addEventListener('click', async function(){
+      try{
+        const token = getCodicentToken();
+        if (!token){
+          if (statusDiv){ statusDiv.style.display='block'; statusDiv.style.color='red'; statusDiv.textContent = (messagesInterface?.[currentLang]?.noTokenMsg) || 'No ?token parameter found in URL.'; }
+          return;
+        }
+        // Init Codicent
+        try { window.Codicent && window.Codicent.init({ token, maxConnectionAttempts: 3 }); } catch(e){ /* ignore init errors here */ }
+        const message = prepareMessageContent();
+        const id = await (window.Codicent && window.Codicent.postMessage ? window.Codicent.postMessage({ message }) : Promise.reject(new Error('CodicentJS not loaded')));
+        if (statusDiv){ statusDiv.style.display='block'; statusDiv.style.color='green'; statusDiv.textContent = (messagesInterface?.[currentLang]?.codicentSuccessPrefix || 'Sent to Codicent: ') + id; }
+      }catch(e){
+        if (statusDiv){ statusDiv.style.display='block'; statusDiv.style.color='red'; statusDiv.textContent = (messagesInterface?.[currentLang]?.codicentErrorPrefix || 'Error: ') + (e?.message || e); }
+      }
+      // Auto-hide after a few seconds
+      if (statusDiv){ setTimeout(()=>{ statusDiv.style.display='none'; }, 8000); }
+    });
+      // Relocalize send button on language change
+      try{
+        var lSel = document.getElementById('langSelect');
+        if (lSel){
+          lSel.addEventListener('change', function(){
+            var m2 = (window.messagesInterface && window.messagesInterface[window.currentLang]) || {};
+            var sb = document.getElementById('sendToCodicentBtn');
+            if (sb) sb.textContent = (m2 && m2.sendForAnalysis) || 'Send for analysis';
+          });
+        }
+      }catch(_){}
+  });
+  // ─────────────────────────────────────────────────────────
+  // NAVIGATION + INIT SÛRE
+  // ─────────────────────────────────────────────────────────
+  function startQuestionnaire(){
+    const selectedQ=document.getElementById("questionnaireSelect").value;
+    if (Array.isArray(disabledForms) && disabledForms.includes(selectedQ)){
+      document.getElementById("menuError").textContent = messagesInterface[currentLang].alertOption;
+      try{ jouerBipErreur(); }catch(_){}
+      alert(messagesInterface[currentLang].alertOption); return;
+    }
+    userCode=(document.getElementById("codeInput").value||"").trim();
+    if (userCode.length!==4 || isNaN(userCode)){
+      document.getElementById("introErrorMsg").textContent = messagesInterface[currentLang].errorCode;
+      jouerBipErreur(); return;
+    }
+    answers=[]; currentQuestion=0; localStorage.removeItem("QSM_"+userCode);
+    document.getElementById("introScreen").style.display="none";
+    document.getElementById("main").style.display="block";
+    showQuestion();
+    refreshInstructionBanner();
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    try{ setSendBtnLabel(); }catch(_){ }
+    /* Localize send button on DOMContentLoaded */
+    try{ const m0=(window.messagesInterface&&window.messagesInterface[currentLang])||{}; const sb0=document.getElementById("sendToCodicentBtn"); if (sb0) sb0.textContent=m0.sendForAnalysis||"Send for analysis"; }catch(_){}
+    // Bouton d'envoi (i18n)
+    localizeSendButton();
+  // Force Swedish label if active language is Svenska
+  try {
+    var sbf = document.getElementById('sendToCodicentBtn');
+    if (sbf && currentLang === 'Svenska') {
+      sbf.textContent = "Skicka för analys";
+    }
+  } catch(_){}
+    // Titre
+    updateHeaderBar();
+  // Force Swedish label if active language is Svenska
+  try {
+    var sbf = document.getElementById('sendToCodicentBtn');
+    if (sbf && currentLang === 'Svenska') {
+      sbf.textContent = "Skicka för analys";
+    }
+  } catch(_){}
+    // Remplir QUESTIONNAIRES
+    const qSel = document.getElementById("questionnaireSelect");
+    if (qSel){
+      qSel.innerHTML =
+        '<option value="DSM">DSM-5</option>'+
+        '<option value="Sommeil">Sommeil</option>'+
+        '<option value="Psych">Psych</option>'+
+        '<option value="Neurology">Neurologie</option>'+
+        '<option value="MedGle">Med Gle</option>';
+      for(let i=0;i<qSel.options.length;i++){ const o=qSel.options[i]; if(disabledForms.includes(o.value)){ o.text = o.text + " (" + messagesInterface[currentLang].unavailable + ")"; } }
+      qSel.onchange = function(){
+        const val=this.value;
+        if(disabledForms.includes(val)){
+          const el=document.getElementById("menuError"); if(el) el.textContent = messagesInterface[currentLang].alertOption;
+          try{ jouerBipErreur(); }catch(_){}
+        }else{
+          const el=document.getElementById("menuError"); if(el) el.textContent="";
+        }
+      };
+    }
+    // Remplir LANGUES
+    const lSel = document.getElementById("langSelect");
+    if (lSel){
+      lSel.innerHTML =
+        '<option value="Français">Français</option>'+
+        '<option value="English">English</option>'+
+        '<option value="Svenska" selected>Svenska</option>';
+      currentLang = lSel.value || "Français";
+      lSel.onchange = function(){
+        try{ setSendBtnLabel(); }catch(_){ }
+        currentLang=this.value;
+        updateInterfaceLang();
+        updateQuestionnaireLabels();
+      };
+    }
+    // Libellés init
+    updateInterfaceLang();
+    updateQuestionnaireLabels();
+    updateTTSBtn();
+    // CONTINUER -> INTRO
+    const nextBtn = document.getElementById("nextLangBtn");
+    if (nextBtn){
+      nextBtn.onclick = function(){
+        const selectedQ = (qSel && qSel.value) || "DSM";
+        const allowed = (window.availableLangsByForm && window.availableLangsByForm[selectedQ]) || [];
+     if (!allowed.includes(currentLang)) {
+    const el = document.getElementById("menuError");
+    // Message en suédois, comme demandé
+    const seulement = (window.messagesInterfaceOverrides && window.messagesInterfaceOverrides['Svenska'] && window.messagesInterfaceOverrides['Svenska'].only) || 'endast';
+    el.textContent = "Ej tillgänglig på detta språk (" + seulement + ": " + allowed.join(", ") + ")";
+    try{ jouerBipErreur && jouerBipErreur(); }catch(_){}
+    return; // NE PAS passer à la page
+} 
+        if (disabledForms.includes(selectedQ)){
+          const el=document.getElementById("menuError"); if(el) el.textContent = messagesInterface[currentLang].alertOption;
+          try{ jouerBipErreur(); }catch(_){}
+          alert(messagesInterface[currentLang].alertOption);
+          return;
+        }
+        const label = qSel ? qSel.options[qSel.selectedIndex].text.replace(" (indisponible)","") : "DSM-5";
+        const headerWord = (window.homeHeaderDefaultByLang &&        window.homeHeaderDefaultByLang[currentLang]) || 'Questionnaire';
+       APP.nom = `${headerWord} ${label}`;   
+        updateHeaderBar();
+  // Force Swedish label if active language is Svenska
+  try {
+    var sbf = document.getElementById('sendToCodicentBtn');
+    if (sbf && currentLang === 'Svenska') {
+      sbf.textContent = "Skicka för analys";
+    }
+  } catch(_){}
+        const intro = (introByForm[currentLang] && introByForm[currentLang][selectedQ]) ? introByForm[currentLang][selectedQ] : messagesInterface[currentLang].intro;
+        const introText = document.getElementById("introText"); if (introText) introText.textContent = intro; introText.style.whiteSpace="pre-line"; introText.style.lineHeight="1.9";
+        document.getElementById("menuScreen").style.display="none";
+        document.getElementById("introScreen").style.display="block";
+        setTimeout(()=>document.getElementById("codeInput").focus(),100);
+      };
+    }
+    // DÉMARRER
+    const startBtn = document.getElementById("startBtn");
+    if (startBtn){
+      startBtn.onclick = startQuestionnaire;
+      document.getElementById("codeInput").addEventListener("keypress",e=>{ if(e.key==="Enter"){ e.preventDefault(); startQuestionnaire(); } });
+    }
+  });
+  </script>
+  <!-- ======================================================
+       AJOUTS FINAUX – TTS toggle + Micro sticky/auto-restart + Android/HTTPS
+       ====================================================== -->
+  <script>
+  (function(){
+    // Variables globales (sécurisées si déjà définies)
+    if (typeof window.recognition === "undefined") window.recognition = null;
+    if (typeof window.listening   === "undefined") window.listening   = false;
+    if (typeof window.currentLang === "undefined") window.currentLang = "Svenska";
+    if (typeof window.ttsEnabled  === "undefined") window.ttsEnabled  = true;
+    // Helper libellés (évite les crash si messagesInterface absent)
+    function M(key, fallback){
+      try { return (messagesInterface && messagesInterface[currentLang] && messagesInterface[currentLang][key]) || fallback; }
+      catch(_){ return fallback; }
+    }
+    document.addEventListener("DOMContentLoaded", function(){
+      var ttsBtn = document.getElementById("ttsToggleBtn");
+      if (!ttsBtn) return;
+      function updateTTSBtn(){ ttsBtn.textContent = ttsEnabled ? M('ttsOn','Vocal') : M('ttsOff','Silence'); }
+      updateTTSBtn();
+      ttsBtn.addEventListener("click", function(){
+        ttsEnabled = !ttsEnabled;
+        try { speechSynthesis.cancel(); } catch(_){}
+        updateTTSBtn();
+      });
+    });
+    // === Micro sticky / auto-restart ===
+    var micSticky = false;
+    var manuallyStopping = false;
+    var restartTimer = null;
+    // Lang reco
+    if (typeof window.setRecognitionLang !== "function"){
+      window.setRecognitionLang = function(){
+        if(!recognition) return;
+        recognition.lang = (currentLang==="English") ? "en-US"
+                        : (currentLang==="Svenska") ? "sv-SE"
+                        : "fr-FR";
+      };
+    }
+    // Init/override reco (handlers robustes)
+    window.initRecognition = function(){
+      window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      var ms = document.getElementById("microStatus");
+      if(!window.SpeechRecognition){
+        if(ms) ms.textContent = (currentLang==="English") ? "🎤 Not supported on this device" : "🎤 Non supporté sur cet appareil";
+        return;
+      }
+      var isFile = location.protocol === "file:";
+      if(!window.isSecureContext && location.hostname!=="localhost" && !isFile){
+        if(ms) ms.textContent = (currentLang==="English") ? "🎤 HTTPS required" : "🎤 HTTPS requis";
+        return;
+      }
+      recognition = new window.SpeechRecognition();
+      setRecognitionLang();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.onstart = function(){
+        listening = true;
+        var ms = document.getElementById("microStatus");
+        if (ms){ ms.textContent = M('microOn','Micro ouvert'); ms.style.color = "green"; }
+        var btn = document.getElementById("voiceBtn");
+        if (btn) btn.textContent = M('microOn','Micro ouvert');
+      };
+      recognition.onend = function(){
+        listening = false;
+        var ms = document.getElementById("microStatus");
+        if (ms){ ms.textContent = M('microOff','Micro fermé'); ms.style.color = "red"; }
+        var btn = document.getElementById("voiceBtn");
+        if (btn) btn.textContent = M('microOff','Micro fermé');
+        if (micSticky && !manuallyStopping && !document.hidden){
+          clearTimeout(restartTimer);
+          restartTimer = setTimeout(function(){
+            try{ recognition.start(); listening = true; if(btn) btn.textContent = M('microOn','Micro ouvert'); }catch(_){}
+          }, 300);
+        }
+        manuallyStopping = false;
+      };
+      recognition.onerror = function(e){
+        listening = false;
+        var err = e && e.error;
+        if (err !== "aborted"){
+          var ms = document.getElementById("microStatus");
+          if (ms){
+            var msg = "🎤 Erreur";
+            if (err==="not-allowed"||err==="service-not-allowed") msg = (currentLang==="English")?"🎤 Permission denied (allow mic)":"🎤 Behörighet nekad (activez le micro)";
+            else if (err==="audio-capture") msg = (currentLang==="English")?"🎤 Microphone not found":"🎤 Micro non détecté";
+            else if (err==="no-speech")     msg = (currentLang==="English")?"🎤 No speech detected":"🎤 Pas de voix détectée";
+            ms.textContent = msg;
+          }
+        }
+        if (micSticky && !manuallyStopping && err!=="not-allowed" && err!=="service-not-allowed" && !document.hidden){
+          clearTimeout(restartTimer);
+          restartTimer = setTimeout(function(){
+            try{ recognition.start(); listening = true; var btn=document.getElementById("voiceBtn"); if(btn) btn.textContent = M('microOn','Micro ouvert'); }catch(_){}
+          }, 500);
+        }
+        manuallyStopping = false;
+      };
+      // onresult : on garde le tien si déjà défini ; sinon, on met une version neutre
+      if (typeof recognition.onresult !== "function"){
+        recognition.onresult = function(e){
+          try{
+            var r = e.results[e.results.length-1][0].transcript;
+            var txt = (r||"").toLowerCase().trim();
+            var a = document.getElementById("answerInput");
+            if (a) a.value = txt;
+          }catch(_){}
+        };
+      }
+    };
+    // Helpers démarrage/arrêt (gèrent sticky + UI + erreurs visibles)
+    window.startMic = function(){
+      if(!recognition) initRecognition();
+      if(!recognition) return;
+      try{ speechSynthesis.cancel(); }catch(_){}
+      clearTimeout(restartTimer);
+      setRecognitionLang();
+      micSticky = true;
+      var btn = document.getElementById("voiceBtn");
+      var ms  = document.getElementById("microStatus");
+      if (btn) btn.textContent = M('microOn','Micro ouvert');
+      if (ms){ ms.textContent = M('microOn','Micro ouvert'); ms.style.color="green"; }
+      try{
+        recognition.start();
+        listening = true;
+      }catch(err){
+        listening = false;
+        micSticky = false;
+        if (btn) btn.textContent = M('microOff','Micro fermé');
+        if (ms)  ms.textContent  = "🎤 Erreur start: " + ((err && (err.name||err.message)) || "inconnue");
+      }
+    };
+    window.stopMic = function(opts){
+      opts = opts || {};
+      var manual = (typeof opts.manual==="boolean") ? opts.manual : true;
+      if(!recognition) return;
+      manuallyStopping = manual;
+      if (manual) micSticky = false;
+      clearTimeout(restartTimer);
+      try{ recognition.abort(); }catch(_){ try{ recognition.stop(); }catch(_){ } }
+      listening = false;
+      var btn = document.getElementById("voiceBtn");
+      var ms  = document.getElementById("microStatus");
+      if (btn) btn.textContent = M('microOff','Micro fermé');
+      if (ms){ ms.textContent = M('microOff','Micro fermé'); ms.style.color="red"; }
+    };
+    // Bouton MICRO (remplace les handlers existants si besoin)
+    document.addEventListener("DOMContentLoaded", function(){
+      var btn = document.getElementById("voiceBtn");
+      var ms  = document.getElementById("microStatus");
+      if (!btn) return;
+      btn.onclick = function(){
+        var isAndroid = /Android/i.test(navigator.userAgent);
+        var isSecure  = window.isSecureContext || location.protocol === "https:" || location.hostname === "localhost";
+        if (listening || micSticky){
+          stopMic({manual:true});
+          return;
+        }
+        if (isAndroid && !isSecure){
+          if (ms) ms.textContent = "🎤 Android exige HTTPS pour le micro";
+          return;
+        }
+        // pré-permission uniquement Android
+        if (isAndroid && navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+          navigator.mediaDevices.getUserMedia({ audio:true })
+            .then(function(s){ s.getTracks().forEach(function(t){t.stop();}); startMic(); })
+            .catch(function(){ if (ms) ms.textContent = M('permDenied','🎤 Behörighet nekad (activez le micro)'); });
+        } else {
+          startMic();
+        }
+      };
+    });
+    // Visibilité onglet : stop temporaire / relance
+    document.addEventListener("visibilitychange", function(){
+      if (document.hidden && listening){
+        stopMic({manual:false});
+      } else if (!document.hidden && micSticky && !listening){
+        startMic();
+      }
+    });
+  })();
+  </script>
+<!-- === BEGIN: Unavailable label fix (handles (undefined)/language) === -->
+<script>
+(function(){
+  function t(key, fallback){
+    try { return (window.messagesInterface && window.messagesInterface[window.currentLang] && window.messagesInterface[window.currentLang][key]) ?? fallback ?? key; }
+    catch(_){ return fallback ?? key; }
+  }
+  function normalizeLang(v){
+    const s = String(v||'').toLowerCase();
+    if (s.includes('english') || s === 'en') return 'English';
+    if (s.includes('svensk') || s.includes('svenska') || s === 'sv') return 'Svenska';
+    return 'Français';
+  }
+  function fixUnavailable(){
+    const qsel = document.getElementById('questionnaireSelect');
+    if (!qsel) return;
+    const word = t('unavailable',
+      (window.currentLang==='Svenska') ? 'otillgänglig' :
+      (window.currentLang==='English') ? 'unavailable'  :
+      'indisponible'
+    );
+    Array.prototype.slice.call(qsel.options).forEach(o=>{
+      if (!o || typeof o.text !== 'string') return;
+      // replace any (undefined|indisponible|unavailable|otillgänglig) at end
+      o.text = o.text.replace(/\s*\((?:undefined|indisponible|unavailable|otillgänglig)\)\s*$/i, ` (${word})`);
+    });
+  }
+  // Hook language changes if present
+  document.addEventListener('DOMContentLoaded', function(){
+    const langSel = document.getElementById('langSelect');
+    if (langSel){
+      langSel.addEventListener('change', function(){
+        window.currentLang = normalizeLang(langSel.value);
+        try{ fixUnavailable(); }catch(_){}
+      });
+    }
+    try{ fixUnavailable(); }catch(_){}
+  });
+  // Patch updateQuestionnaireLabels to always fix after it runs
+  (function(){
+    const orig = window.updateQuestionnaireLabels;
+    window.updateQuestionnaireLabels = function(){
+      if (typeof orig === 'function'){ try{ orig.apply(this, arguments); }catch(_){ } }
+      try{ fixUnavailable(); }catch(_){}
+    };
+  })();
+})();
+</script>
+<!-- === END: Unavailable label fix === -->
+<script>
+(function(){
+  function renderHomeIntroMinimal(){
+    var box = document.getElementById('headerIntro');
+    if (!box) return;
+    var L = window.currentLang || 'Français';
+    var lines = {
+      'Français':[
+        "Choisissez un questionnaire et une langue pour commencer.",
+        "Vos réponses sont confidentielles. Prenez votre temps."
+      ],
+      'English':[
+        "Pick a questionnaire and a language to get started.",
+        "Your answers are confidential. Take your time."
+      ],
+      'Svenska':[
+        "Välj formulär och språk för att börja.",
+        "Dina svar är konfidentiella. Ta den tid du behöver."
+      ]
+    }[L] || ["Choisissez un questionnaire et une langue pour commencer."];
+    box.innerHTML = lines.join('<br>');
+    box.style.display = 'block';
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    try{ renderHomeIntroMinimal(); }catch(e){}
+  });
+})();
+</script>
+<!-- HEADER d'accueil : lit la CONFIG + i18n + contrôle langue dispo -->
+  <!-- ========== CHARGEUR & NOTABLES ========== -->
+  <script>
+    function getQuestionsFor(formId, lang){
+      var bank = window.QUESTIONNAIRE_BANK || {};
+      var form = bank[formId] || {};
+      if (form[lang] && form[lang].length) return form[lang].slice();
+      if (form["Français"] && form["Français"].length) return form["Français"].slice();
+      var langs = Object.keys(form);
+      for (var i=0;i<langs.length;i++){
+        var L = langs[i];
+        if (Array.isArray(form[L]) && form[L].length) return form[L].slice();
+      }
+      return [];
+    }
+    // Liste d’index notables par formulaire (adaptez à vos tableaux)
+    const NOTABLES_BY_FORM = {
+      DSM:         [5,6,7,8,9,10],
+      SOMMEIL:     [3,4,5,6],
+      NEUROLOGIE:  [2,3,7],
+      PSYCHIATRIE: [1,5,6],
+      MEDEG:       [4,8]
+    };
+    function applyNotables(formId, questions){
+      var list = (NOTABLES_BY_FORM && NOTABLES_BY_FORM[formId]) || [];
+      for (var i=0;i<list.length;i++){
+        var idx = list[i];
+        if (questions[idx]) questions[idx].type = "scale";
+      }
+    }
+  </script>
+  <!-- ========== /CHARGEUR & NOTABLES ========== -->
+<script id="homeHeader_i18n">
+(function(){
+  function setHomeHeaderTitle(){
+    var title = document.getElementById('mainTitle');
+    if (!title) return;
+    var L = window.currentLang || 'Français';
+    var map = (window.homeHeaderDefaultByLang && typeof window.homeHeaderDefaultByLang === 'object')
+      ? window.homeHeaderDefaultByLang
+      : { 'Français':'Questionnaire', 'English':'Questionnaire', 'Svenska':'Frågeformulär' };
+    title.textContent = map[L] || map['Français'];
+  }
+  function renderHomeIntro(){
+    var box = document.getElementById('headerIntro');
+    if (!box) return;
+    var L = window.currentLang || 'Français';
+    var map = (window.homeHeaderIntroLinesByLang && typeof window.homeHeaderIntroLinesByLang === 'object')
+      ? window.homeHeaderIntroLinesByLang
+      : {
+          'Français':[
+            'Choisissez un questionnaire et une langue pour commencer.',
+            'Vos réponses sont confidentielles. Prenez votre temps.'
+          ],
+          'English':[
+            'Pick a questionnaire and a language to get started.',
+            'Your answers are confidential. Take your time.'
+          ],
+          'Svenska':[
+            'Välj formulär och språk för att börja.',
+            'Dina svar är konfidentiella. Ta den tid du behöver.'
+          ]
+        };
+    var lines = map[L] || map['Français'];
+    box.innerHTML = (lines||[]).join('<br>');
+    box.style.display = 'block';
+  }
+  function notAvailMessage(selLang, onlyLangs){
+    var mi = (window.messagesInterface && messagesInterface[selLang]) || {};
+    var prefix = mi.notAvailableLang
+      || (selLang==='English' ? 'Not available in this language'
+          : selLang==='Svenska' ? 'Inte tillgängligt på detta språk'
+          : 'Non disponible dans cette langue');
+    var onlyWord = mi.only
+      || (selLang==='English' ? 'only' : selLang==='Svenska' ? 'endast' : 'seulement');
+    var abbr = { 'Français':'Fr', 'Svenska':'Su', 'English':'Ang' };
+    var ab = (onlyLangs||[]).map(function(L){ return abbr[L] || L; }).join('/');
+    return prefix + ' — ' + onlyWord + ': ' + ab;
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    var lSel = document.getElementById('langSelect');
+    var qSel = document.getElementById('questionnaireSelect');
+    var btn  = document.getElementById('nextLangBtn');
+    var err  = document.getElementById('menuError');
+    if (lSel && lSel.value) window.currentLang = lSel.value;
+    setHomeHeaderTitle();
+    renderHomeIntro();
+    if (lSel){
+      lSel.addEventListener('change', function(){
+        window.currentLang = lSel.value || 'Français';
+        setHomeHeaderTitle();
+        renderHomeIntro();
+      });
+    }
+    // disponibilité par questionnaire (utilise la CONFIG si fournie)
+    window.availableLangsByForm = window.availableLangsByForm || { DSM:['Français'] };
+    if (btn && qSel){
+      var oldHandler = btn.onclick;
+      btn.onclick = function(){
+        var formId = (qSel.value||'').trim();
+        var lang   = window.currentLang || (lSel && lSel.value) || 'Français';
+        var okList = (window.availableLangsByForm && window.availableLangsByForm[formId]) || ['Français'];
+        if (okList.indexOf(lang) === -1){
+          if (err){ err.textContent = notAvailMessage(lang, okList); }
+          try{ if (window.jouerBipErreur) jouerBipErreur(); }catch(_){}
+          return;
+        }
+        try{ var hi=document.getElementById('headerIntro'); if(hi) hi.style.display='none'; }catch(_){}
+        if (typeof oldHandler === 'function') return oldHandler.call(this);
+      };
+    }
+  });
+})();
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  // APP.version override (optionnel)
+  if (window.APP_VERSION_OVERRIDE && typeof window.APP_VERSION_OVERRIDE === 'string' && window.APP_VERSION_OVERRIDE.trim() !== ''){
+    try{
+      if (window.APP){ APP.version = window.APP_VERSION_OVERRIDE; }
+      if (typeof updateHeaderBar === 'function'){ updateHeaderBar();
+  // Force Swedish label if active language is Svenska
+  try {
+    var sbf = document.getElementById('sendToCodicentBtn');
+    if (sbf && currentLang === 'Svenska') {
+      sbf.textContent = "Skicka för analys";
+    }
+  } catch(_){}
+ }
+    }catch(_){}
+  }
+  // introByForm overrides (merge propriété à propriété)
+  try{
+    if (window.introByFormOverrides && window.introByForm){
+      Object.keys(window.introByFormOverrides).forEach(function(lang){
+        if (!introByForm[lang]) introByForm[lang] = {};
+        var src = window.introByFormOverrides[lang] || {};
+        Object.keys(src).forEach(function(formId){
+          introByForm[lang][formId] = src[formId];
+        });
+      });
+    }
+  }catch(_){}
+  // messagesInterface overrides (merge)
+  try{
+    if (window.messagesInterfaceOverrides && window.messagesInterface){
+      Object.keys(window.messagesInterfaceOverrides).forEach(function(lang){
+        var src = window.messagesInterfaceOverrides[lang] || {};
+        if (!messagesInterface[lang]) messagesInterface[lang] = {};
+        Object.keys(src).forEach(function(k){
+          messagesInterface[lang][k] = src[k];
+        });
+      });
+    }
+  }catch(_){}
+});
+</script>
+<!-- HARD-STOP language guard: blocks immediately if chosen language is not Svenska -->
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  try{
+    var btn = document.getElementById('nextLangBtn');
+    if (!btn) return;
+    // Capture-phase so we run BEFORE any other click handlers
+    btn.addEventListener('click', function(ev){
+      try{
+        var ls = document.getElementById('langSelect');
+        var chosen = (ls && ls.value) ? ls.value : 'Svenska';
+        if (chosen !== 'Svenska'){
+          var el = document.getElementById('menuError');
+          var word = (chosen==='English' ? 'Language' : chosen==='Svenska' ? 'Språk' : 'Langue');
+          var na   = (chosen==='English' ? 'Unavailable' : chosen==='Svenska' ? 'Ej tillgänglig' : 'Non disponible');
+          if (el) el.textContent = word + ' : ' + na + ' (endast: Svenska)';
+          try { if (typeof jouerBipErreur==='function') jouerBipErreur(); } catch(_){}
+          ev.stopImmediatePropagation(); // stop other handlers
+          ev.preventDefault();
+          return false;
+        }
+      }catch(_){}
+      return true;
+    }, true); // <-- CAPTURE
+  }catch(_){}
+});
+</script>
+<script>
+(function(){
+  function getLang(){
+    try { return window.currentLang || (document.documentElement.getAttribute('lang')==='sv'?'Svenska':'Français'); }
+    catch(_){ return 'Français'; }
+  }
+  function invalidMsgFor(lang){
+    if (lang==='English') return 'Rewrite your answer';
+    if (lang==='Svenska') return 'Skriv om ditt svar';
+    return 'Réécrivez votre réponse';
+  }
+  // Essaie de localiser le champ "Ange ditt svar"
+  function findScoreInput(){
+    // 1) ID habituel
+    var el = document.getElementById('scoreInput');
+    if (el) return el;
+    // 2) Chercher le label contenant "Ange ditt svar"
+    var labels = document.querySelectorAll('label, .label, span, p, div');
+    for (var i=0;i<labels.length;i++){
+      var t = (labels[i].innerText||labels[i].textContent||'').trim().toLowerCase();
+      if (t.includes('ange ditt svar')){
+        // champ immédiatement après ou dans le même conteneur
+        var next = labels[i].nextElementSibling;
+        if (next && next.tagName==='INPUT') return next;
+        var input = labels[i].parentElement && labels[i].parentElement.querySelector('input');
+        if (input) return input;
+      }
+    }
+    // 3) fallback: un input number borné 1–5 visible
+    var cand = document.querySelector('input[type="number"][min="1"][max="5"]');
+    if (cand) return cand;
+    // 4) dernier recours: premier input visible
+    return document.querySelector('input');
+  }
+  function ensureErrorBelow(input){
+    var el = document.getElementById('scoreError');
+    if (!el){
+      el = document.createElement('div');
+      el.id = 'scoreError';
+      el.style.cssText = 'color:blue;font-weight:bold;margin-top:4px;display:block;';
+      input.insertAdjacentElement('afterend', el);
+    }
+    return el;
+  }
+  function showInvalid(){
+    var input = findScoreInput(); if(!input) return;
+    var msg = invalidMsgFor(getLang());
+    var el = ensureErrorBelow(input);
+    el.textContent = msg;
+    try { if (typeof jouerBipErreur==='function') jouerBipErreur(); } catch(_){}
+  }
+  function clearInvalid(){
+    var el = document.getElementById('scoreError');
+    if(el) el.textContent = '';
+  }
+  function validateVal(v){
+    var n = parseInt(v,10);
+    if (isNaN(n) || n<1 || n>5){ showInvalid(); return false; }
+    clearInvalid(); return true;
+  }
+  function attach(){
+    var si = findScoreInput();
+    if(!si || si.__hasValidation) return;
+    si.__hasValidation = true;
+    si.addEventListener('blur',   function(){ validateVal(this.value); });
+    si.addEventListener('change', function(){ validateVal(this.value); });
+    si.addEventListener('keydown',function(e){ if(e.key==='Enter'){ validateVal(this.value); }});
+    // Bloquer la navigation si invalide
+    var btn = document.getElementById('nextLangBtn') || document.getElementById('nextBtn') || document.querySelector('button[type="submit"]');
+    if (btn && !btn.__scoreGuard){
+      btn.__scoreGuard = true;
+      btn.addEventListener('click', function(ev){
+        var s = findScoreInput();
+        if (s && s.offsetParent!==null && !validateVal(s.value)){
+          ev.preventDefault(); ev.stopImmediatePropagation();
+          return false;
+        }
+        return true;
+      }, true); // capture
+    }
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', attach);
+  } else {
+    attach();
+  }
+  // Si le champ apparaît plus tard (changement de page), on ré-attache
+  var obs = new MutationObserver(attach);
+  try { obs.observe(document.documentElement, {childList:true, subtree:true}); } catch(_){}
+})();
+</script>
+<!-- BEGIN NOTABLE_SCORE_GUARD (bleu, effacement après affichage, focus, 1–5, flèches neutralisées) -->
+<script>
+(function(){
+  function getLang(){
+    try { return window.currentLang || (document.documentElement.getAttribute('lang')==='sv'?'Svenska':'Français'); }
+    catch(_){ return 'Français'; }
+  }
+  function invalidMsgFor(lang){
+    if (lang==='English') return 'Rewrite your answer';
+    if (lang==='Svenska') return 'Skriv om ditt svar';
+    return 'Réécrivez votre réponse';
+  }
+  function findScoreInput(){
+    var el = document.getElementById('scoreInput'); if (el) return el;
+    var q = document.querySelector('input[type="number"][min], input[type="number"], input[name*="score" i], input[data-score], input[aria-label*="Ange ditt svar" i]');
+    if (q) return q;
+    var all = document.querySelectorAll('input');
+    for (var i=0;i<all.length;i++){
+      var n = all[i], s = window.getComputedStyle(n);
+      if (s.display!=='none' && s.visibility!=='hidden' && n.offsetParent!==null) return n;
+    }
+    return null;
+  }
+  function ensureErrorBelow(input){
+    var el = document.getElementById('scoreError');
+    if (!el){
+      el = document.createElement('div');
+      el.id = 'scoreError';
+      el.style.cssText = 'color:blue;font-weight:bold;margin-top:4px;display:block;';
+      input.insertAdjacentElement('afterend', el);
+    } else {
+      el.style.display = 'block';
+    }
+    return el;
+  }
+  function forceFocus(input){
+    try { input.blur(); } catch(_){}
+    setTimeout(function(){
+      try { input.focus({preventScroll:true}); } catch(_){ try{ input.focus(); }catch(e){} }
+      try { input.setSelectionRange(0,0); } catch(_){}
+    }, 0);
+  }
+  function showInvalid(input){
+    var el = ensureErrorBelow(input);
+    el.textContent = invalidMsgFor(getLang());     // 1) montrer le message d'abord
+    try { if (typeof jouerBipErreur==='function') jouerBipErreur(); } catch(_){}
+    try { input.value = ''; } catch(_){}
+    try { input.dispatchEvent(new Event('input', {bubbles:true})); } catch(_){}
+    try { input.dispatchEvent(new Event('change', {bubbles:true})); } catch(_){}
+    forceFocus(input);
+  }
+  function clearInvalid(){
+    var el = document.getElementById('scoreError');
+    if (el) el.textContent = '';
+  }
+  function validateVal(input){
+    var n = parseInt(input.value,10);
+    if (isNaN(n) || n<1 || n>5){ showInvalid(input); return false; }
+    clearInvalid(); return true;
+  }
+  function attach(){
+    var si = findScoreInput();
+    if (!si || si.__hasValidationGuard) return;
+    try { si.min = 1; si.max = 5; } catch(_){}
+    try {
+      si.style.MozAppearance = "textfield";
+      si.style.appearance = "textfield";
+      si.addEventListener('wheel', function(e){ e.preventDefault(); }, {passive:false});
+      si.addEventListener('keydown', function(e){
+        if (e.key==='ArrowUp' || e.key==='ArrowDown'){
+          var v = parseInt(this.value||'',10);
+          if (isNaN(v) || v<1 || v>5) e.preventDefault();
+        }
+      });
+      var css = document.createElement("style");
+      css.textContent = 'input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0;}';
+      document.head.appendChild(css);
+    } catch(_){}
+    si.addEventListener('input', function(){
+      var v = this.value, n = parseInt(v,10);
+      if (v!=='' && (isNaN(n) || n<1 || n>5)) showInvalid(this);
+    });
+    si.addEventListener('blur',   function(){ validateVal(this); });
+    si.addEventListener('change', function(){ validateVal(this); });
+    si.addEventListener('keydown',function(e){
+      if(e.key==='Enter'){ if(!validateVal(this)){ e.preventDefault(); e.stopPropagation(); } }
+    });
+    var btn = document.getElementById('nextLangBtn') || document.getElementById('nextBtn') || document.querySelector('button[type="submit"]');
+    if (btn && !btn.__scoreGuard){
+      btn.__scoreGuard = true;
+      btn.addEventListener('click', function(ev){
+        var s = findScoreInput();
+        if (s && s.offsetParent!==null){
+          if (!validateVal(s)){ ev.preventDefault(); ev.stopImmediatePropagation(); return false; }
+        }
+        return true;
+      }, true);
+    }
+    si.__hasValidationGuard = true;
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', attach);
+  } else {
+    attach();
+  }
+  try { new MutationObserver(attach).observe(document.documentElement,{childList:true,subtree:true}); } catch(_){}
+})();
+</script>
+<!-- END NOTABLE_SCORE_GUARD -->
+<script>
+// === Dynamic loader for CodicentJS with fallback & diagnostics ===
+async function loadCodicentJS(){
+  if (window.Codicent && window.Codicent.postMessage) return true;
+  return new Promise((resolve)=>{
+    const statusDiv = document.getElementById('codicentStatus');
+    function say(msg, color){ if(statusDiv){ statusDiv.style.display='block'; statusDiv.style.color=color||'red'; statusDiv.textContent=msg; } }
+    const s = document.createElement('script');
+    s.src = "https://izaxon.github.io/codicentjs/codicentjs.min.js";
+    s.async = true;
+    s.onload = ()=>{ resolve(!!(window.Codicent && window.Codicent.postMessage)); };
+    s.onerror = ()=>{ say("CodicentJS could not be loaded from izaxon.github.io. If blocked, please use local copy.", "red"); resolve(false); };
+    document.head.appendChild(s);
+    setTimeout(()=>{ if (!(window.Codicent && window.Codicent.postMessage)){ say("Loading CodicentJS is taking too long... (network blocked?)", "orange"); } }, 3000);
+  });
+}
+// Helper: Blob → Base64
+function blobToBase64(blob){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const res = reader.result || "";
+      const b64 = String(res).includes(",") ? String(res).split(",")[1] : String(res);
+      resolve(b64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+// CLICK HANDLER: build PDF and send to Codicent
+document.getElementById("sendToCodicentBtn")?.addEventListener('click', async () => {
+  const statusDiv = document.getElementById('codicentStatus');
+  try {
+    const ok = await loadCodicentJS();
+    if (!ok) throw new Error('CodicentJS not loaded');
+    const params = new URLSearchParams(window.location.search);
+    const token  = params.get('token') || localStorage.getItem('access_token');
+    if (!token) {
+      statusDiv.style.color = 'red';
+      statusDiv.textContent = 'No ?token=… parameter found in the URL.';
+      statusDiv.style.display = 'block';
+      setTimeout(()=> statusDiv.style.display='none', 6000);
+      return;
+    }
+    if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('jsPDF not available (include it in <head>).');
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF();
+    // === Remplis le PDF avec tes vraies données ===
+    let y = 10;
+    pdf.setFontSize(14); pdf.text("Questionnaire – Summary", 10, y); y += 8;
+    pdf.setFontSize(11);
+    const code = (document.getElementById('codeInput')?.value || window.userCode || "").trim();
+    if (code){ pdf.text("Code: " + code, 10, y); y += 6; }
+    if (Array.isArray(window.questions) && Array.isArray(window.answers)){
+      window.questions.forEach((q, i) => {
+        const qText = (q && (q.text || q.texte || "")) ? String(q.text || q.texte) : "";
+        const aText = (window.answers[i] || "");
+        const block = (i+1) + ". " + qText + "\nSvar: " + aText;
+        const lines = pdf.splitTextToSize(block, 180);
+        if (y + lines.length * 6 > 285) { pdf.addPage(); y = 10; }
+        pdf.text(lines, 10, y);
+        y += lines.length * 6 + 2;
+      });
+    }
+    const globalComment = (document.getElementById('globalComment')?.value || "").trim();
+    if (globalComment){
+      const lines = pdf.splitTextToSize("Kommentar: " + globalComment, 180);
+      if (y + lines.length * 6 > 285) { pdf.addPage(); y = 10; }
+      pdf.text(lines, 10, y); y += lines.length * 6 + 2;
+    }
+    const pdfBlob = pdf.output("blob");
+    const pdfBase64 = await blobToBase64(pdfBlob);
+    window.Codicent.init({ token, maxConnectionAttempts: 3 });
+    const messageId = await window.Codicent.postMessage({
+      message: {
+        filename: "questionnaire.pdf",
+        filetype: "application/pdf",
+        content: pdfBase64
+      }
+    });
+    statusDiv.style.color='green';
+    statusDiv.textContent = 'PDF sent to Codicent! ID: ' + messageId;
+    statusDiv.style.display='block';
+    setTimeout(()=> statusDiv.style.display='none', 8000);
+  } catch (e) {
+    statusDiv.style.color='red';
+    statusDiv.textContent = 'Error sending to Codicent: ' + (e?.message || e);
+    statusDiv.style.display='block';
+    setTimeout(()=> statusDiv.style.display='none', 8000);
+  }
+});
+</script>
+<script>
+// MODIF ajustement des langues — fin de réponse robuste (STOP/SLUT/SLUTA) sans toucher à tes fonctions
+(function(){
+  // Normalisation (minuscules, accents retirés, ponctuation enlevée)
+  function norm(s){
+    if (typeof s !== "string") return "";
+    s = s.toLowerCase().trim();
+    if (s.normalize) s = s.normalize("NFKD").replace(/[\u0300-\u036f]/g,"");
+    return s.replace(/[.,!?;:()\[\]{}"«»…]/g," ").replace(/\s+/g," ").trim();
+  }
+  // On accepte ces mots-clés (pour fiabiliser la reco Edge: "slut." / "sluta.")
+  function hasEndWord(s){
+    const n = norm(s);
+    // si tu veux strictement par langue, remets le test sur window.currentLang ici
+    return /\b(stop|slut|sluta)\b/i.test(n);
+  }
+  function stripEndWord(s){
+    let n = norm(s);
+    n = n.replace(/\b(stop|slut|sluta)\b/gi,"").replace(/\s+/g," ").trim();
+    return n;
+  }
+  // Trouver le champ de réponse "actif" (input texte ou textarea visible)
+  function getActiveAnswerEl(){
+    const cand = Array.from(document.querySelectorAll('textarea, input[type="text"], input:not([type])'));
+    const vis = cand.filter(el => el && el.offsetParent !== null && !el.disabled && !el.readOnly);
+    if (document.activeElement && vis.includes(document.activeElement)) return document.activeElement;
+    // fallback: le plus large (souvent le champ principal)
+    return vis.sort((a,b)=> (b.clientWidth*b.clientHeight) - (a.clientWidth*a.clientHeight))[0] || null;
+  }
+  // Nettoie + valide (après que ton code a écrit dans le champ)
+  function cleanAndValidateNow(el){
+    if (!el) return;
+    const raw = el.value;
+    if (!raw) return;
+    if (!hasEndWord(raw)) return;
+    const cleaned = stripEndWord(raw);
+    setTimeout(function(){
+      const e = getActiveAnswerEl() || el;
+      if (e) e.value = cleaned;
+      if (typeof validateAnswer === "function") validateAnswer();
+    }, 0);
+  }
+  // Écoute tous les changements d’entrée (clavier, reco, etc.)
+  document.addEventListener('input', function(ev){
+    const t = ev && ev.target;
+    if (!t) return;
+    if (t.matches('textarea, input[type="text"], input:not([type])')){
+      // laisse d'abord les autres handlers finir, puis on agit
+      setTimeout(()=> cleanAndValidateNow(t), 0);
+    }
+  }, true);
+  // Sécurité : si ton code met à jour sans déclencher 'input', on scrute les variations
+  let lastVal = "";
+  setInterval(function(){
+    const el = getActiveAnswerEl();
+    if (!el) return;
+    const v = el.value;
+    if (v !== lastVal){
+      lastVal = v;
+      setTimeout(()=> cleanAndValidateNow(el), 0);
+    }
+  }, 200);
+})();
+</script>
+<script>
+// MODIF — focus automatique après clic sur TYST/RÖST et MICRO (additif, sans override)
+(function(){
+  // Définir focusAnswer uniquement si elle n'existe pas déjà
+  if (typeof window.focusAnswer !== "function"){
+    window.focusAnswer = function(){
+      try{
+        var a = document.getElementById("answerInput");
+        if (!a) return;
+        a.focus();
+        // place le curseur à la fin
+        var v = a.value || "";
+        try{ a.setSelectionRange(v.length, v.length); }catch(_){}
+      }catch(_){}
+    };
+  }
+  function attachFocusAfterClick(el){
+    if (!el) return;
+    // On n'empêche rien : on se contente d'ajouter un listener APRES ton handler
+    el.addEventListener("click", function(){
+      // Laisse d'abord le bouton faire son toggle, puis remet le focus
+      setTimeout(window.focusAnswer, 0);
+    }, false);
+  }
+  // Boutons connus par id
+  attachFocusAfterClick(document.getElementById("ttsToggleBtn")); // TYST/RÖST
+  attachFocusAfterClick(document.getElementById("voiceBtn"));     // MICRO
+  // Filet de sécurité : si les IDs changent, on tente sur les boutons dont le texte contient TYST/RÖST/VOICE/MICRO
+  var candidates = Array.from(document.querySelectorAll('button, [role="button"]'))
+    .filter(function(b){
+      var t = (b.textContent || "").toLowerCase();
+      return /tyst|röst|rost|voice|micro|mikro/i.test(t);
+    });
+  candidates.forEach(attachFocusAfterClick);
+})();
+</script>
+<script>
+/* ===== TTS — bloc unique (PC / Samsung) ===== */
+/* IMPORTANT: garde UNE SEULE fois cette déclaration dans tout le fichier */
+var synth = window.speechSynthesis || null;
+var __voices = [];
+var TTS_STORE_KEY = "ttsVoiceNameByLangCode";
+var ttsVoiceNameByLang = {};
+// 1) Map currentLang -> BCP-47
+function getCurrentLangCode(){
+  var txt = (window.currentLang || "").toLowerCase();
+  if (txt.indexOf("sv")===0) return "sv-SE";
+  if (txt.indexOf("en")===0) return "en-US";
+  if (txt.indexOf("fr")===0) return "fr-FR";
+  return "fr-FR";
+}
+// 2) Store
+(function(){
+  try{ ttsVoiceNameByLang = JSON.parse(localStorage.getItem(TTS_STORE_KEY) || "{}"); }
+  catch(_){ ttsVoiceNameByLang = {}; }
+})();
+function tts_saveStore(){ try{ localStorage.setItem(TTS_STORE_KEY, JSON.stringify(ttsVoiceNameByLang)); }catch(_){} }
+// 3) Candidates
+function tts_candidatesForLang(langCode){
+  var want = langCode.indexOf("sv")===0 ? ["sv-SE","sv"]
+           : langCode.indexOf("en")===0 ? ["en-US","en-GB","en"]
+           :                               ["fr-FR","fr-CA","fr"];
+  var low = function(s){ return (s||"").toLowerCase(); };
+  var vendorsFirst = function(v){ return /google|microsoft|samsung|apple/i.test(v.name); };
+  var exact = (__voices||[]).filter(function(v){ return want.indexOf(v.lang)>=0 || want.indexOf((v.lang||"").substr(0,5))>=0; });
+  var langOnly = (__voices||[]).filter(function(v){
+    return exact.indexOf(v)===-1 && want.some(function(w){ return low(v.lang).indexOf(low(w.substring(0,2)))===0; });
+  });
+  return exact.concat(langOnly).sort(function(a,b){ return (vendorsFirst(b)-vendorsFirst(a)); });
+}
+// 4) UI strings
+function tts_uiStrings(){
+  var code = getCurrentLangCode();
+  if (code.indexOf("sv")===0){
+    return {
+      label:"Röst (enligt enheten):",
+      test:"Rösttest",
+      hint:"Valet sparas per språk. Använd ”Rösttest”.",
+      noVoice:function(lc){ return "Ingen lokal röst tillgänglig för " + lc + ". Installera rösten i Android/Windows."; }
+    };
+  }
+  if (code.indexOf("en")===0){
+    return {
+      label:"Voice (device):",
+      test:"Test voice",
+      hint:"Choice saved per language. Use “Test voice”.",
+      noVoice:function(lc){ return "No local voice available for " + lc + ". Install the voice in Android/Windows."; }
+    };
+  }
+  return {
+    label:"Voix (selon l'appareil) :",
+    test:"Test voix",
+    hint:"Choix mémorisé par langue. Utilise « Test voix ».",
+    noVoice:function(lc){ return "Aucune voix locale disponible pour " + lc + ". Installe la voix dans Android/Windows."; }
+  };
+}
+function tts_applyUILabels(){
+  var s = tts_uiStrings();
+  // Trouve le label de manière robuste (plusieurs fallback)
+  var lab = document.getElementById("voiceLabel");
+  if (!lab) {
+    lab = document.querySelector('label[for="voiceSelect"]');
+    if (!lab) {
+      var sel = document.getElementById("voiceSelect");
+      // remonte jusqu'au conteneur #voiceRow puis cherche le 1er label
+      var n = sel;
+      while (n && n.id !== "voiceRow") n = n.parentNode;
+      if (n) lab = n.querySelector("label");
+    }
+  }
+  var btn  = document.getElementById("testVoiceBtn");
+  var hint = document.getElementById("voiceHint");
+  if (lab)  lab.textContent  = s.label;   // ex: "Röst (enligt enheten):"
+  if (btn)  btn.textContent  = s.test;    // ex: "Rösttest"
+  if (hint) hint.textContent = s.hint;    // ex: "Valet sparas per språk…"
+}
+// 5) Populate select
+function tts_populateVoiceSelect(){
+  var sel  = document.getElementById("voiceSelect");
+  var hint = document.getElementById("voiceHint");
+  if (!sel) return;
+  sel.innerHTML = "";
+  var langCode = getCurrentLangCode();
+  var list = tts_candidatesForLang(langCode);
+  var key = langCode.substring(0,2).toUpperCase(); // SV/FR/EN
+  var stored = ttsVoiceNameByLang[key];
+  var ui = tts_uiStrings();
+  if (!list.length){
+    var o = document.createElement("option");
+    o.value = ""; o.textContent = ui.noVoice(langCode);
+    sel.appendChild(o);
+    if (hint) hint.textContent = ui.noVoice(langCode);
+    tts_applyUILabels();
+    return;
+  }
+  list.forEach(function(v){
+    var o = document.createElement("option");
+    o.value = v.name; o.textContent = v.name + " (" + v.lang + ")";
+    sel.appendChild(o);
+  });
+  if (stored && list.find(function(v){ return v.name===stored; })) {
+    sel.value = stored;
+  } else {
+    sel.selectedIndex = 0;
+  }
+  tts_applyUILabels();
+}
+// 6) Selected voice
+function tts_getSelectedVoice(){
+  var sel = document.getElementById("voiceSelect");
+  var name = sel && sel.value;
+  return name ? (__voices||[]).find(function(v){ return v.name===name; }) || null : null;
+}
+// 7) Load voices
+function tts_loadVoices(){
+  try{ __voices = synth ? (synth.getVoices() || []) : []; }catch(_){ __voices = []; }
+  if (typeof tts_populateVoiceSelect==='function'){ tts_populateVoiceSelect(); }
+}
+if (typeof speechSynthesis !== "undefined"){
+  speechSynthesis.onvoiceschanged = tts_loadVoices;
+  setTimeout(tts_loadVoices, 0);
+  setTimeout(tts_loadVoices, 600);
+}
+// 8) Wire UI + sync with existing language menu (#langSelect)
+document.addEventListener("DOMContentLoaded", function(){
+  var langSel = document.getElementById("langSelect");
+  if (langSel){
+    window.currentLang = langSel.value || (langSel.options[langSel.selectedIndex] && langSel.options[langSel.selectedIndex].text) || window.currentLang || "Français";
+    onUILanguageChanged();
+    langSel.addEventListener("change", function(){
+      window.currentLang = langSel.value || (langSel.options[langSel.selectedIndex] && langSel.options[langSel.selectedIndex].text) || "Français";
+      onUILanguageChanged();
+    });
+  } else {
+    window.currentLang = window.currentLang || "Français";
+  }
+  var sel = document.getElementById("voiceSelect");
+  if (sel){
+    sel.addEventListener("change", function(){
+      var key = getCurrentLangCode().substring(0,2).toUpperCase();
+      ttsVoiceNameByLang[key] = sel.value || "";
+      tts_saveStore();
+    });
+  }
+  var testBtn = document.getElementById("testVoiceBtn");
+  if (testBtn){
+    testBtn.addEventListener("click", function(){
+      var code = getCurrentLangCode();
+      var sample = code.indexOf("sv")===0 ? "Det här är ett rösttest."
+                 : code.indexOf("en")===0 ? "This is a voice test."
+                 : "Ceci est un test de voix.";
+      tts_testSpeak(sample);
+    });
+  }
+  tts_loadVoices();
+  tts_applyUILabels();
+});
+// 9) Test voice
+function tts_testSpeak(text){
+  if (!synth || !text) return;
+  try{
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = getCurrentLangCode();
+    var v = tts_getSelectedVoice(); if (v) u.voice = v;
+    u.rate = 1.0; u.pitch = 1.0;
+    synth.cancel(); synth.speak(u);
+  }catch(_){}
+}
+// 10) Call when UI language changed (and at end of updateInterfaceLang)
+function onUILanguageChanged(){
+  try { 
+    if (typeof tts_populateVoiceSelect==='function'){ tts_populateVoiceSelect(); }
+    tts_applyUILabels();
+  } catch(_) {}
+}
+// 11) Unified speak
+function lireTexte(txt){
+  if (!window.ttsEnabled || !txt || !synth) return;
+  if (!__voices || __voices.length === 0){ setTimeout(function(){ lireTexte(txt); }, 350); return; }
+  try{
+    var plain = String(txt).replace(/<[^>]+>/g,"");
+    var u = new SpeechSynthesisUtterance(plain);
+    u.lang = getCurrentLangCode();
+    var v = tts_getSelectedVoice(); if (v) u.voice = v;
+    u.rate = 1.0; u.pitch = 1.0;
+    synth.cancel(); synth.speak(u);
+  }catch(_){}
+}
+</script>
+<script>
+(function(){
+  if (!('speechSynthesis' in window)) return;
+  if (window.__speakGuardLight) return;
+  window.__speakGuardLight = true;
+  var _speak = speechSynthesis.speak.bind(speechSynthesis);
+  speechSynthesis.speak = function(u){
+    try { if (typeof window.ttsEnabled !== 'undefined' && !window.ttsEnabled) return; } catch(_){}
+    _speak(u);
+  };
+})();
+</script>
+
+<script>
+// === Auto-clear 'not available' error when allowed language is reselected (FR parity) ===
+document.addEventListener('DOMContentLoaded', function(){
+  function clearNotAvailIfAllowed(){
+    try{
+      var qSel = document.getElementById('questionnaireSelect');
+      var lSel = document.getElementById('langSelect');
+      var err  = document.getElementById('menuError');
+      if (!qSel || !lSel || !err) return;
+      var formId = (qSel.value||'DSM');
+      var lang   = (window.currentLang || lSel.value || 'Svenska');
+      var okList = (window.availableLangsByForm && window.availableLangsByForm[formId]) || ['Svenska'];
+      if (okList.indexOf(lang) !== -1){
+        err.textContent = "";
+      }
+    }catch(_){}
+  }
+  var lSel = document.getElementById('langSelect');
+  var qSel = document.getElementById('questionnaireSelect');
+  if (lSel){ lSel.addEventListener('change', clearNotAvailIfAllowed); }
+  if (qSel){ qSel.addEventListener('change', clearNotAvailIfAllowed); }
+  // initial check
+  clearNotAvailIfAllowed();
+});
+</script>
+
+<!-- === PATCH: Corriger (2 nivåer) — rensa sedan föregående fråga (forceIndex + robust idx) === -->
+<script>
+(function(){
+  let __corrigerStage = 0;     // 0 = rensa denna, 1 = gå till föregående
+  let __lastCorrigerTs = 0;
+
+  function getDisplayedIndex(){
+    var idx = -1;
+    try{
+      var el = document.getElementById('questionNum');
+      if (el){
+        var m = el.textContent.match(/(\d+)\s*\/\s*(\d+)/);
+        if (m) idx = parseInt(m[1], 10) - 1;
+      }
+    }catch(_){}
+    if (!(idx >= 0) && typeof window.currentQuestion === 'number') idx = window.currentQuestion;
+    return idx;
+  }
+
+  function wireCorriger(){
+    const btn = document.getElementById('corrigerBtn');
+    if (!btn) return;
+
+    // Ersätt noden för att ta bort gamla lyssnare
+    const clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+
+    function handler(ev){
+      if (ev){
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+      }
+      const now = Date.now();
+      if (now - __lastCorrigerTs > 4000) __corrigerStage = 0;
+      __lastCorrigerTs = now;
+
+      // Alltid: stäng mikro och skala
+      try { if (window.recognition && window.listening) { recognition.abort && recognition.abort(); recognition.stop && recognition.stop(); window.listening = false; } } catch(_){}
+      try {
+        const sc = document.getElementById('scoreContainer');
+        if (sc) sc.style.display = 'none';
+        const si = document.getElementById('scoreInput');
+        if (si) si.value = '';
+      } catch(_) {}
+
+      if (__corrigerStage === 0) {
+        // NIVÅ 1: rensa och stanna på samma fråga (textläge + fokus)
+        const f = document.getElementById('answerInput');
+        if (f) { f.disabled = false; f.style.display = 'block'; f.value = ''; setTimeout(function(){ if (f.focus) f.focus(); }, 60); }
+        window.justCorrected = true;
+        try {
+          const m = (window.messagesInterface && window.messagesInterface[window.currentLang]) || {};
+          const err = document.getElementById('mainErrorMsg');
+          if (err) { err.textContent = m.alertRewrite || "Skriv om ditt svar"; setTimeout(function(){ err.textContent=""; }, 1800); }
+        } catch(_){ }
+        __corrigerStage = 1; // nästa klick => föregående
+      } else {
+        // NIVÅ 2: gå till föregående fråga (robust)
+        __corrigerStage = 0;
+        window.justCorrected = false;
+        var idx = getDisplayedIndex();
+        var target = (typeof idx === 'number' && idx > 0) ? (idx - 1) : 0;
+        window.__forceIndex = target; // låt showQuestion() använda detta index
+        setTimeout(function(){ if (window.showQuestion) window.showQuestion(); }, 50);
+      }
+    }
+
+    clone.addEventListener('click', handler, false);
+
+    // Capture-level interception på dokumentet (om nån annan handler reste kvar)
+    document.addEventListener('click', function(ev){
+      var t = ev.target;
+      var btn2 = (t && t.id === 'corrigerBtn') ? t : (t && t.closest ? t.closest('#corrigerBtn') : null);
+      if (btn2){
+        handler(ev);
+      }
+    }, true);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireCorriger);
+  } else {
+    wireCorriger();
+  }
+})();
+</script>
+
+<!-- OPTION A PATCH: Q34/35/36/38/39/40 => Verbal 1 + MIXTE (Texte → Échelle) -->
+<script>
+(function(){
+  'use strict';
+  function runPatch(){
+    try{
+      var toIdx = function(n){ return (Number(n)-1)|0; };
+      var targetsQ = [34,35,36,38,39,40];
+      var targets = targetsQ.map(toIdx);
+
+      function toSet(x){
+        if (x instanceof Set) return new Set(Array.from(x));
+        if (Array.isArray(x)) return new Set(x);
+        return new Set();
+      }
+
+      // Ensure globals
+      window.NOTABLES_SET = new Set(Array.isArray(window.notables) ? window.notables : Array.from(window.NOTABLES_SET || []));
+      window.MIXED_QUESTIONS = toSet(window.MIXED_QUESTIONS);
+      window.VERBAL_SCALE_QUESTIONS = toSet(window.VERBAL_SCALE_QUESTIONS);
+
+      // 1) Mark as Verbal 1
+      targets.forEach(function(i){ window.VERBAL_SCALE_QUESTIONS.add(i); });
+
+      // 2) MIXED: text first → remove "notables" + clear type="scale"
+      targets.forEach(function(i){
+        window.MIXED_QUESTIONS.add(i);
+        window.NOTABLES_SET.delete(i);
+        if (window.questions && window.questions[i]){ try{ delete window.questions[i].type; }catch(_){ } }
+      });
+
+      // 3) Resync 'notables' array if used
+      window.notables = Array.from(window.NOTABLES_SET);
+
+      // 4) Guarantee the verbal1 label on these targets
+      (function(){
+        var L = (window.SCALE_LABELS && window.SCALE_LABELS.sv) || {
+          verbal1: ["inte alls","kanske","lite","ganska mycket","mycket"],
+          helpPrefix: "Välj ett betyg 1–5"
+        };
+        var orig = window.applyScaleLabels;
+        window.applyScaleLabels = function(qIndex){
+          try{
+            if (targets.indexOf(qIndex) >= 0){
+              var lbl = document.getElementById("scoreLabel");
+              if (lbl){
+                var labels = L.verbal1;
+                lbl.textContent = (L.helpPrefix || "Välj ett betyg 1–5") + ": " + labels.map(function(x,i){ return (i+1)+"="+x; }).join(", ");
+              }
+              var si = document.getElementById("scoreInput");
+              if (si){ si.min="1"; si.max="5"; }
+              return;
+            }
+          }catch(_){}
+          if (typeof orig === "function") return orig(qIndex);
+        };
+      })();
+
+      // 5) Safety: enforce text-first on these targets even if some other path opens score
+      (function(){
+        function textFirst(){
+          var cq = ((Number(window.currentQuestion)||0)|0);
+          if (targets.indexOf(cq) < 0) return;
+          var sc = document.getElementById("scoreContainer"); if (sc){ sc.style.display="none"; sc.hidden=true; }
+          var ta = document.getElementById("answerInput");   if (ta){ ta.disabled=false; ta.style.display="block"; if(!ta.value) ta.value=""; try{ ta.focus(); }catch(_){ } }
+        }
+        if (typeof window.showQuestion === "function"){
+          var o = window.showQuestion;
+          window.showQuestion = function(){
+            var r = o.apply(this, arguments);
+            var k=10; (function loop(){ textFirst(); if(--k>0) requestAnimationFrame(loop); })();
+            return r;
+          };
+        }
+        document.addEventListener("click", function(ev){
+          var btn = ev.target && ev.target.closest && ev.target.closest("#validateScoreBtn, #validerBtn, #nextBtn, #prevBtn");
+          if (!btn) return;
+          setTimeout(textFirst, 0);
+          setTimeout(textFirst, 120);
+        }, true);
+      })();
+    }catch(e){ console.warn("Option A patch error", e); }
+  }
+  if (document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", function(){ setTimeout(runPatch, 0); });
+  } else {
+    setTimeout(runPatch, 0);
+  }
+})();
+</script>
+
+</body>
+</html>
