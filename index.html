@@ -1,6 +1,6 @@
-﻿﻿<!DOCTYPE html>
 <!--
 ====================================================================
+Version 74
 CONFIGURATION RAPIDE (à modifier en haut du fichier)
 - homeHeaderDefaultByLang : texte court dans la banderole AVANT le choix
   (ex. 'Bienvenue' / 'Welcome' / 'Välkommen' OU 'Questionnaire' / 'Frågeformulär')
@@ -17,56 +17,77 @@ CONFIGURATION RAPIDE (à modifier en haut du fichier)
    Le programme charge l’une ou l’autre en fonction du mode choisi (standard vs test).
 COMMENT MODIFIER :
 - Changez simplement les valeurs dans les objets JS ci-dessous (entre <script>
-// ===== PRELUDE (unique, défini très tôt) =====
-window.ttsEnabled = (typeof window.ttsEnabled === "boolean") ? window.ttsEnabled : false;
+<!-- ===== PRELUDE (unique, défini très tôt) — VERSION RECALÉE POUR dsm74 (Q4 ajoutée) ===== -->
+<!DOCTYPE html>
+<html lang="sv">
 
-// Config labels (sv)
+<script>
+// Conserver l’état TTS s’il est déjà défini
+window.ttsEnabled = (typeof window.ttsEnabled === "boolean") ? window.ttsEnabled : false;
+// Libellés d’échelles (sv)
 const SCALE_LABELS = {
   sv: {
-    numeric: ["aldrig","ibland","ofta","mycket ofta","alltid"],
-    verbal1: ["inte alls","kanske","lite","ganska mycket","mycket"],
-    verbal2: ["dålig","rättvis","bra","mycket bra","utmärkt"],
+    numeric : ["aldrig","ibland","ofta","mycket ofta","alltid"],
+    verbal1 : ["inte alls","kanske","lite","ganska mycket","mycket"],
+    verbal2 : ["dålig","rättvis","bra","mycket bra","utmärkt"],
     helpPrefix: "Välj ett betyg 1–5"
   }
 };
 
-// Indices 0-based à échelle (notables)
-// Q27/Q46 exclus (texte seul) ; Q30 (29) et Q32 (31) inclus pour échelle
+/*
+   NOTE DE RECALAGE (dsm71) :
+   - Ajout de Q4 => tous les numéros de questions suivants sont décalés de +1.
+   - Conséquences mises à jour ci-dessous.
+
+   Notables (indices 0-based marqués "scale"):
+   Ancien dsm70:  [5..25, 29,31,32, 33,34,35, 37, 41,42,43, 47,48,49]
+   Nouveau dsm71: [6..26, 30,32,33, 34,35,36, 38, 42,43,44, 48,49,50]
+
+   Commentaire explicatif mis à jour :
+   Q28 / Q47 = texte seul (exclus échelle) ; Q31 (30) et Q33 (32) = forcer VERBAL2.
+*/
+
+// Indices 0-based à échelle (notables) — VERSION RECALÉE dsm74
 var notables = [
-  5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,
-  29, 31,32,
-  33,34,35,
-  37,
-  41,42,43,
-  47,48,49
+  6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,
+  30, 32,33,
+  34,35,36,
+  38,
+  42,43,44,
+  48,49,50
 ];
-window.NOTABLES_SET = new Set(notables);
+window.NOTABLES_SET = new Set(notables);// Shim TTS (sécurité)
+window.ttsEnabled = (typeof window.ttsEnabled === "boolean") ? window.ttsEnabled : false;
 
+// Questions MIXTES (texte → puis échelle 1–5) — RECALÉ (+1)
+window.MIXED_QUESTIONS = new Set([28,29,34,35,36,38,39,40]);
 
-// Shim TTS to avoid ReferenceError before declarations
-var ttsEnabled = (typeof window.ttsEnabled === 'boolean') ? window.ttsEnabled : false;
-// Mixte (sans 26)
-window.MIXED_QUESTIONS = new Set([27,28,33,34,35,37,38,39]);
-
-// Verbal2 mapping (1-based "30,32" -> 0-based {29,31})
+// Cartographie VERBAL2 — en entrée 1-based → conversion 0-based
+// Ancien dsm70: "30,32" (→ 29,31). Nouveau dsm71: "31,33" (→ 30,32).
 function __toZeroBasedSet(csv){
-  return new Set(String(csv).split(/[,;\s]+/).map(s=>parseInt(s,10)).filter(n=>Number.isInteger(n)&&n>=1).map(n=>n-1));
+  return new Set(
+    String(csv).split(/[,;\s]+/)
+      .map(s => parseInt(s,10))
+      .filter(n => Number.isInteger(n) && n >= 1)
+      .map(n => n - 1)
+  );
 }
-const VERBAL2_SET = __toZeroBasedSet("30,32");
+const VERBAL2_SET = __toZeroBasedSet("31,33");
 
-// Type d'échelle — priorité à Q30/Q32 → VERBAL2
+// Type d’échelle — priorité à Q31/Q33 → VERBAL2 (indices 0-based: 30, 32)
 function getScaleTypeForQuestion(qIndex){
-  if (qIndex === 29 || qIndex === 31) return "verbal2";
-  if (VERBAL2_SET.has(qIndex)) return "verbal2";
+  if (qIndex === 30 || qIndex === 32) return "verbal2";
+  if (VERBAL2_SET.has(qIndex))       return "verbal2";
   return "numeric";
 }
 
-// Appliquer labels à l'ouverture de l'échelle
+// Appliquer les libellés au moment d’ouvrir l’échelle
 window.applyScaleLabels = function(qIndex){
   try{
     var L = SCALE_LABELS.sv;
     var t = getScaleTypeForQuestion(qIndex);
     var labels = (t==="verbal2") ? L.verbal2 : (t==="verbal1") ? L.verbal1 : L.numeric;
+
     var labelEl = document.getElementById("scoreLabel");
     if (labelEl){
       labelEl.textContent = L.helpPrefix + ": " + labels.map((x,i)=>(i+1)+"="+x).join(", ");
@@ -76,353 +97,34 @@ window.applyScaleLabels = function(qIndex){
   }catch(_){}
 };
 
-// Quand l'UI est prête, marquer questions[i].type="scale" et forcer labels pour Q30/Q32
+// À l’initialisation UI : marquer les notables en type "scale" et surveiller l’ouverture du bloc score
 document.addEventListener("DOMContentLoaded", function(){
   try{
     if (Array.isArray(window.questions)){
-      notables.forEach(function(i){ if (window.questions[i]) window.questions[i].type = "scale"; });
+      notables.forEach(function(i){
+        if (window.questions[i]) window.questions[i].type = "scale";
+      });
     }
   }catch(_){}
+
   try{
     var sc = document.getElementById("scoreContainer");
     if (sc){
       var mo = new MutationObserver(function(){
         try{
-          if (sc.style.display !== "none"){ window.applyScaleLabels(window.currentQuestion); }
+          if (sc.style.display !== "none"){
+            window.applyScaleLabels(window.currentQuestion);
+          }
         }catch(_){}
       });
       mo.observe(sc, {attributes:true, attributeFilter:["style","class"]});
     }
   }catch(_){}
 });
+</scrip
 // ===== /PRELUDE =====
-…</script>).
-- Laissez les clés telles quelles (Français/English/Svenska, DSM/SOMMEIL/etc.).
-====================================================================
-// ----
-﻿<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>html,body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Arial,sans-serif}</style>
-<style>
-#introText { white-space: pre-line; line-height: 1.9 !important; }
-#labelCode { font-weight: 700; }
-</style>
-<!-- Menu Langue (donne bien id="langSelect") -->
-<!-- Sélecteur de voix + test -->
-</div>
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <title>Questionnaire</title>
-</head>
-<body>
-<!-- ================================================================
-     BLOC DE VALIDITÉ — NOM DE FICHIER + PARAMÈTRES DE LIEN + ADMIN
-// ----
-     ▶ Choix de validité au moment d'envoyer le lien :
-        - ?vdays=5          → X jours à partir de la 1ʳᵉ ouverture (plus sûr)
-        - ?vdate=YYYY-MM-DD → date précise (ex. 2025-09-25)
-        - ?vunlim=1         → illimité
-        - ?vlabel=off       → cache la bannière
+…</script>).t>
 
-     ▶ Fallback par NOM DE FICHIER (si aucun paramètre) :
-        dsm60_sv_3days.html, dsm60_sv_10d.html
-        dsm60_sv_uid-Jean_6days.html  (clé séparée pour "Jean")
-        dsm60_sv_7days_v2.html        (campagne v2)
-        (par défaut, si rien trouvé : 3 jours)
-
-     ▶ ADMIN / ÉDITION ILLIMITÉE (toi) :
-        - Au 1er accès, un prompt demande le code : tape seulement les
-          premières lettres (ex. "swe…") → si ça correspond, tu es admin.
-        - Mémo admin stocké dans localStorage de CET appareil.
-        - Pour l’activer sans prompt : ?setadmin=1
-        - Pour le désactiver : ?clearadmin=1
-        - Bypass ponctuel : ?vadmin=TONCODE (ex. swedsleep)
-        - Illimité AUTO si ouverture en local (file://) ou localhost.
-
-     ▶ OPTION : date fixe ABSOLUE (dans le code)
-        Si tu veux forcer une date limite commune (ex. 30 sept 2025),
-        remplace la ligne :
-           endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + days);
-        par :
-           endDate = new Date("2025-09-30T23:59:59");
-
-     💡 Smartphones : compatible (prompt + bannières OK sur iOS/Android).
-     ================================================================ -->
-<script>
-(function(){
-  // --------- PARAMÈTRES LIEN ---------
-  function qs(name){ try{ return new URL(window.location.href).searchParams.get(name); }catch(_){ return null; } }
-  var VUNLIM = qs("vunlim");
-  var VDATE  = qs("vdate");
-  var VDAYS  = qs("vdays");
-  var SHOW   = qs("vlabel") !== "off";
-  var SETADM = qs("setadmin")==="1";
-  var CLRADM = qs("clearadmin")==="1";
-  var VADMIN = qs("vadmin");
-
-  // --------- MESSAGES (FR/EN/SV) ---------
-  var M = {
-    fr:{expired:"⚠️ Ce test n’est plus disponible (expiré).", warn:"⚠️ Attention : ce test sera désactivé demain.",
-        welcome:"✅ Ce test est valable jusqu’au ", unlim:"✅ Ce test est valable sans limite.", admin:"🛠️ Mode édition activé (illimité)"},
-    en:{expired:"⚠️ This test is no longer available (expired).", warn:"⚠️ Warning: this test will be disabled tomorrow.",
-        welcome:"✅ This test is valid until ",     unlim:"✅ This test is valid with no expiry.", admin:"🛠️ Edit mode enabled (no expiry)"},
-    sv:{ numeric:["aldrig","ibland","ofta","mycket ofta","alltid"], verbal1:["inte alls","kanske","lite","ganska mycket","mycket"], verbal2:["dålig","rättvis","bra","mycket bra","utmärkt"], helpPrefix:"Välj ett betyg 1–5" }
-  };
-  function fmt(d, lang){
-    var locales = {fr:"fr-FR", en:"en-US", sv:"sv-SE"};
-    return d.toLocaleDateString(locales[lang]||"fr-FR", {year:"numeric", month:"long", day:"numeric"});
-  }
-  function toDateYMD(s){
-    if(!s) return null;
-    var m;
-    if((m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return new Date(+m[1], m[2]-1, +m[3]);
-    if((m=s.match(/^(\d{2})-(\d{2})-(\d{4})$/))) return new Date(+m[3], m[2]-1, +m[1]);
-    if((m=s.match(/^(\d{4})(\d{2})(\d{2})$/)))   return new Date(+m[1], m[2]-1, +m[3]);
-    if((m=s.match(/^(\d{2})(\d{2})(\d{4})$/)))   return new Date(+m[3], m[2]-1, +m[1]);
-    return null;
-  }
-  function startOfDay(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
-
-  // --------- IDENTIFIANTS PAR NOM FICHIER ---------
-  var FILE = (location.pathname.split("/").pop() || "").toLowerCase();
-  var mDays = FILE.match(/_(\d+)\s*(?:days|d)\b/i);
-  var requestedDaysFromFile = parseInt(mDays ? mDays[1] : "7", 10);
-  if(!Number.isFinite(requestedDaysFromFile) || requestedDaysFromFile < 1) requestedDaysFromFile = 7;
-  if(requestedDaysFromFile > 30) requestedDaysFromFile = 30;
-
-  var mUid = FILE.match(/_uid-([a-z0-9_-]+)/i);
-  var UID = (mUid ? mUid[1] : "anon");
-
-  var mVer = FILE.match(/_v(\d+)/i);
-  var VERSION = "v" + (mVer ? mVer[1] : "1");
-
-  var FILE_BASE = (FILE.split("_")[0] || "dsm");
-
-  // --------- ADMIN : CODE PAR PROMPT + PERSISTANCE LOCAL ---------
-  var ADMIN_CODE = "swedsleep"; // 🔒 Ton code complet (modifiable ici)
-  var ADMIN_KEY  = "validity_admin";
-  var isLocal = (location.protocol === "file:") || (location.hostname === "localhost") || (location.hostname === "127.0.0.1");
-
-  try{
-    if (SETADM) localStorage.setItem(ADMIN_KEY, "1");
-    if (CLRADM) localStorage.removeItem(ADMIN_KEY);
-  }catch(_){}
-
-  var ADMIN = false;
-  try{ ADMIN = localStorage.getItem(ADMIN_KEY)==="1"; }catch(_){}
-
-  if (isLocal) ADMIN = true;
-  if (VADMIN && String(VADMIN).toLowerCase() === ADMIN_CODE.toLowerCase()) ADMIN = true;
-
-  // Si pas encore admin → demander le code
-	if (!ADMIN){
-  // Prompt admin multilingue
-  var msgAdmin = {
-    "Français": "Entrez le code admin (tapez les premières lettres) :",
-    "English" : "Enter the admin code (type the first letters):",
-    "Svenska" : "Ange administratörskoden (skriv de första bokstäverna):"
-  }[window.currentLang] || "Enter admin code:";
-
-  var ans = prompt(msgAdmin);
-
-  // Version souple : l'entrée doit commencer par le code
-  if (ans && ADMIN_CODE.toLowerCase().startsWith(String(ans).toLowerCase())) {
-    ADMIN = true;
-    try{ localStorage.setItem(ADMIN_KEY, "1"); }catch(_){}
-    alert({
-      "Français":"Mode édition activé (illimité).",
-      "English":"Edit mode enabled (no expiry).",
-      "Svenska":"Redigeringsläge aktiverat (obegränsat)."
-    }[window.currentLang] || "Admin mode on");
-  }
-}
-
-    // 💡 Version actuelle (souple) : il suffit que l'entrée COMMENCE par le code
-    if (ans && ADMIN_CODE.toLowerCase().startsWith(String(ans).toLowerCase())) {
-      ADMIN = true;
-      try{ localStorage.setItem(ADMIN_KEY, "1"); }catch(_){}
-      alert("Mode édition activé (illimité).");
-    }
-
-    // ⚠️ Pour passer en mode STRICT (exiger le code complet) :
-    // Remplace la ligne ci-dessus par :
-    //   if (ans && ADMIN_CODE.toLowerCase() === String(ans).toLowerCase()) {
-    // → Dans ce cas, il faudra taper tout le code exactement (ex. "swedsleep25")
-  }
-
-  if (ADMIN){
-    if (SHOW){
-      document.write(
-        "<div style='text-align:center;color:#0a7b32;font-weight:bold;line-height:1.6;margin:8px 0'>"
-        + M.fr.admin + "<br>" + M.en.admin + "<br>" + M.sv.admin + "</div>"
-      );
-    }
-    return; // pas d'expiration en mode admin
-  }
-
-  // --------- CALCUL ÉCHÉANCE POUR UTILISATEUR ---------
-  var unlimited = false, endDate = null;
-
-  if (VUNLIM === "1") {
-    unlimited = true;
-  } else if (VDATE) {
-    endDate = toDateYMD(VDATE);
-    if(!endDate) unlimited = true;
-  } else if (VDAYS) {
-    var daysParam = parseInt(VDAYS, 10);
-    if (Number.isFinite(daysParam) && daysParam > 0) {
-      var KEY_P = FILE_BASE + "_firstOpen_param_" + (UID||"anon") + "_" + (VERSION||"v1") + "_" + daysParam;
-      var startISO_P = null;
-      try{ startISO_P = localStorage.getItem(KEY_P); }catch(_){}
-      if (!startISO_P){
-        startISO_P = new Date().toISOString().slice(0,10);
-        try{ localStorage.setItem(KEY_P, startISO_P); }catch(_){}
-      }
-      var startDate = toDateYMD(startISO_P) || new Date();
-      endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + daysParam);
-    } else {
-      unlimited = true;
-    }
-  } else {
-    var KEY_F = FILE_BASE + "_firstOpen_" + (UID||"anon") + "_" + (VERSION||"v1") + "_" + requestedDaysFromFile;
-    var st = null;
-    try{ st = localStorage.getItem(KEY_F); }catch(_){}
-    if (!st){
-      var firstOpenISO = new Date().toISOString().slice(0,10);
-      try{ localStorage.setItem(KEY_F, firstOpenISO); }catch(_){}
-      st = firstOpenISO;
-    }
-    var startDateF = toDateYMD(st) || new Date();
-    endDate = new Date(startDateF.getFullYear(), startDateF.getMonth(), startDateF.getDate() + requestedDaysFromFile);
-  }
-
-  if (!SHOW) return;
-
-  // --------- AFFICHAGE / BLOCAGE ---------
-  var now = startOfDay(new Date());
-  if (unlimited){
-    document.write(
-      "<div style='text-align:center;color:#0a7b32;font-weight:bold;line-height:1.6;margin:8px 0'>"
-      + M.fr.unlim + "<br>" + M.en.unlim + "<br>" + M.sv.unlim + "</div>"
-    );
-    return;
-  }
-
-  endDate = startOfDay(endDate);
-  var oneDay = 24*60*60*1000;
-  var diffDays = Math.ceil((endDate - now)/oneDay);
-
-  if (now > endDate){
-    document.write(
-      "<h2 style='color:#d00000;text-align:center;line-height:1.6;margin:10px 0'>"
-      + M.fr.expired + "<br>" + M.en.expired + "<br>" + M.sv.expired + "</h2>"
-    );
-    window.__FORM_EXPIRED__ = true;
-  } else {
-    document.write(
-      "<div style='text-align:center;color:#b10000;font-weight:700;line-height:1.6;margin:8px 0'>"
-      + M.fr.welcome + fmt(endDate,"fr") + "<br>"
-      + M.en.welcome + fmt(endDate,"en") + "<br>"
-      + M.sv.welcome + fmt(endDate,"sv") + "</div>"
-    );
-    if (diffDays === 1){
-      document.write(
-        "<div style='background:#d00000;color:white;text-align:center;padding:10px;font-weight:bold;line-height:1.6'>"
-        + M.fr.warn + "<br>" + M.en.warn + "<br>" + M.sv.warn + "</div>"
-      );
-    }
-  }
-
-  document.addEventListener("DOMContentLoaded", function(){
-    if (window.__FORM_EXPIRED__){
-      ["menuScreen","introScreen","main","summary"].forEach(function(id){
-        var el = document.getElementById(id);
-        if (el){ el.style.pointerEvents="none"; el.style.opacity="0.5"; }
-      });
-    }
-  });
-})();
-</script>
-<!-- ================================================================
-     FIN DU BLOC DE VALIDITÉ
-     ================================================================ -->
-
-<script>
-// === UI CENTRALISÉE (copié du FR, adaptée SV) ===
-var UI_STRINGS = {
-  "Français": {
-    homeTitle: "Sélectionner Questionnaire et Langue",
-    questionnaire: "Questionnaire :",
-    language: "Langue :",
-    continue: "Continuer",
-    introTitle: "Introduction",
-    codeLabel: "Entrez un code (4 chiffres dont vous devrez vous rappeler) :",
-    start: "Commencer",
-    tts: { label:"Voix (selon l’appareil) :", test:"Test voix", hint:"Si rien ne parle, choisissez une autre voix ou vérifiez la configuration audio." },
-    notAvailableLang: "Langue non disponible pour ce formulaire (Français uniquement).",
-    notAvailableForm: "Non disponible. Veuillez choisir DSM.",
-    headerIntro: [
-      "Choisissez un questionnaire et une langue pour commencer.",
-      "Vos réponses sont confidentielles. Prenez votre temps."
-    ]
-  },
-  "English": {
-    homeTitle: "Select Questionnaire and Language",
-    questionnaire: "Questionnaire:",
-    language: "Language:",
-    continue: "Continue",
-    introTitle: "Introduction",
-    codeLabel: "Enter your code (4 digits):",
-    start: "Start",
-    tts: { label:"Voice (device dependent):", test:"Test voice", hint:"If you hear nothing, pick another voice or check audio settings." },
-    notAvailableLang: "Language not available for this form (French only).",
-    notAvailableForm: "Not available. Please choose DSM.",
-    headerIntro: [
-      "Pick a questionnaire and a language to get started.",
-      "Your answers are confidential. Take your time."
-    ]
-  },
-  "Svenska": {
-    homeTitle: "Välj formulär och språk",
-    questionnaire: "Formulär:",
-    language: "Språk:",
-    continue: "Fortsätt",
-    introTitle: "Introduktion",
-    codeLabel: "Ange din kod (4 siffror):",
-    start: "Börja",
-    tts: { label:"Röst (enhetsberoende):", test:"Testa röst", hint:"Om inget hörs, välj en annan röst eller kontrollera ljudinställningarna." },
-    notAvailableLang: "Språk ej tillgängligt för detta formulär (endast franska).",
-    notAvailableForm: "Inte tillgänglig. Välj DSM.",
-    headerIntro: [
-      "Välj formulär och språk för att börja.",
-      "Dina svar är konfidentiella. Ta den tid du behöver."
-    ]
-  }
-};
-
-var FORM_LABELS = {
-  "Français": { DSM:"DSM-5", Sommeil:"Sommeil", Psych:"Psych", Neurology:"Neurologie", MedGle:"Médecine générale" },
-  "English" : { DSM:"DSM-5", Sommeil:"Sleep",   Psych:"Psych", Neurology:"Neurology",  MedGle:"General Medicine" },
-  "Svenska" : { DSM:"DSM-5", Sommeil:"Sömn",    Psych:"Psykiatri", Neurology:"Neurologi", MedGle:"Allmänmedicin" }
-};
-
-var AVAILABLE_LANGS_BY_FORM = { DSM:["Svenska"], Sommeil:[], Psych:[], Neurology:[], MedGle:[] };
-</script>
-<script>
-// Mirror for legacy menu logic expecting window.availableLangsByForm
-window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurology: [], MedGle: [] };
-</script>
-
-
-
-  
-  <!-- ========== BANQUE DE QUESTIONS (multi-formulaires) ========== -->
   <script>
     /* Remplacez ces tableaux par vos questions réelles.
        Laissez les clés (DSM, SOMMEIL, NEUROLOGIE, PSYCHIATRIE, MEDEG) et les langues. */
@@ -609,14 +311,61 @@ window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurol
       font-weight: 500;
       opacity: 1;
     }
+
+
 </style>
+<script>
+// === BOOT LANG PAR DÉFAUT → SVENSKA (DSM) ===
+(function(){
+  window.currentForm = "DSM";
+  window.currentLang = "Svenska";
+
+  // Disponibilités côté menu (forcer DSM→Svenska)
+  window.AVAILABLE_LANGS_BY_FORM = { DSM:["Svenska"], Sommeil:[], Psych:[], Neurology:[], MedGle:[] };
+  window.availableLangsByForm    = window.AVAILABLE_LANGS_BY_FORM;
+
+  // Purge d’anciens choix mémorisés qui repassent en FR
+  try {
+    localStorage.removeItem("ui_lang");
+    localStorage.removeItem("lastLang");
+    localStorage.removeItem("menu_lang");
+  } catch(_) {}
+
+  document.addEventListener("DOMContentLoaded", function(){
+    try{
+      var fSel = document.getElementById("questionnaireSelect");
+      var lSel = document.getElementById("langSelect");
+      if (fSel) fSel.value = "DSM";
+      if (lSel){
+        var hasSv = Array.from(lSel.options||[]).some(function(o){return o && o.value==="Svenska";});
+        if (!hasSv) lSel.add(new Option("Svenska","Svenska"));
+        lSel.value = "Svenska";
+      }
+      var err = document.getElementById("menuError");
+      if (err) err.textContent = "";
+      if (typeof window.applyHomeUI === "function") {
+        window.applyHomeUI("Svenska");
+      } else {
+        var h2 = document.querySelector("#menuScreen h2");
+        if (h2 && window.UI_STRINGS && window.UI_STRINGS["Svenska"]) {
+          h2.textContent = window.UI_STRINGS["Svenska"].homeTitle;
+        }
+      }
+    }catch(_){}
+  });
+})();
+
+
+</script>
 </head>
+
+
 <body>
   <header>
     <h1 id="titleBar">
       <span id="mainTitle">Questionnaire DSM-5</span>
       —
-      <span id="versionNum">Version Q10p</span>
+      <span id="versionNum">Version 74 Q10p</span>
     </h1>
     <div id="headerIntro" class="header-intro" aria-live="polite" style="display:none"></div>
   </header>
@@ -672,7 +421,7 @@ window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurol
     <button id="corrigerBtn">Corriger</button>
     <button id="pauseBtn">Pause</button>
     <button id="voiceBtn" type="button" onclick="(function(){var SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){alert('Taligenkänning stöds inte i denna webbläsare.');return;}if(!(window.isSecureContext||location.protocol==='https:'||location.hostname==='localhost')){alert('Mikrofon kräver HTTPS (eller localhost) på Android.');return;}if(!window.__rec){window.__rec=new SR();var lang=(window.currentLang==='Français'?'fr-FR':(window.currentLang==='English'?'en-US':'sv-SE'));window.__rec.lang=lang;window.__rec.interimResults=true;window.__rec.continuous=false;window.__rec.maxAlternatives=1;window.__rec.onstart=function(){var b=document.getElementById('voiceBtn');if(b){var on=(window.messagesInterface&&window.currentLang&&window.messagesInterface[window.currentLang]?window.messagesInterface[window.currentLang].microOn:'🎤 Mikrofon på');b.textContent=on;b.classList.add('active');}};window.__rec.onend=function(){var b=document.getElementById('voiceBtn');if(b){var off=(window.messagesInterface&&window.currentLang&&window.messagesInterface[window.currentLang]?window.messagesInterface[window.currentLang].microOff:'🎤 Mikrofon av');b.textContent=off;b.classList.remove('active');}};window.__rec.onerror=function(e){console.warn('Reco error',e);var b=document.getElementById('voiceBtn');if(b){var off=(window.messagesInterface&&window.currentLang&&window.messagesInterface[window.currentLang]?window.messagesInterface[window.currentLang].microOff:'🎤 Mikrofon av');b.textContent=off;b.classList.remove('active');}};}var ok=true; try{window.__rec.start();}catch(e){ok=false;}if(!ok && navigator.mediaDevices && navigator.mediaDevices.getUserMedia){navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){try{s.getTracks().forEach(function(t){t.stop();});}catch(_){}}).then(function(){setTimeout(function(){try{window.__rec.start();}catch(_){}} , 0);});}})()">🎙️ Mikrofon</button>
-    <button id="ttsToggleBtn" onclick="(function(){var cur=(typeof window.ttsEnabled==='undefined'?true:!!window.ttsEnabled);window.ttsEnabled=!cur;try{ttsEnabled=window.ttsEnabled;}catch(_){ }if(!window.ttsEnabled && window.speechSynthesis && speechSynthesis.cancel){try{speechSynthesis.cancel();}catch(_){}}try{if(typeof updateTTSBtn==='function')updateTTSBtn();}catch(_){ }})()">Röst</button>
+    <button id="ttsToggleBtn" onclick="(function(){var cur=(typeof window.ttsEnabled==='undefined'?true:!!window.ttsEnabled);window.ttsEnabled=!cur;try{window.ttsEnabled=window.ttsEnabled;}catch(_){ }if(!window.ttsEnabled && window.speechSynthesis && speechSynthesis.cancel){try{speechSynthesis.cancel();}catch(_){}}try{if(typeof updateTTSBtn==='function')updateTTSBtn();}catch(_){ }})()">Röst</button>
   </section>
   <section id="summary" style="display:none;">
     <h2 id="summaryTitle">Sammanfattning och korrigering</h2>
@@ -700,7 +449,7 @@ window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurol
   // ─────────────────────────────────────────────────────────
   const APP = {
     nom: "Questionnaire DSM-5",
-    version: "Version Q70p"};
+    version: "Version Q70 74p"};
   function majTitrePage(nom = APP.nom, version = APP.version){
     try{
       document.getElementById('pageTitle').textContent = version ? (nom + " - " + version) : nom;
@@ -750,7 +499,7 @@ window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurol
       };
   let config = {
     nomQuestionnaire: "Questionnaire DSM-5",
-    version: "v Q10p",
+    version: "v Q10p 74",
     couleursBande: "#ffffcc",
     langues: ["Français","English","Svenska"],
  // Temps de reponse avant de passer a la prochaine question - "minDelayDefault" doit etre plus petit que que "tempsMaxReponse")
@@ -766,6 +515,8 @@ window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurol
   let questions = [{ section: 1, text: "Hur gammal är du?" },
 { text: "Är du man, kvinna eller annat?" },
 { text: "Vad har du för yrke?" },
+{ text: "Beskriv ditt nuvarande problem och varför du söker hjälp" },
+
 { section: 2, text: "Finns det kända medicinska tidigare sjukdomar? Om ja, specificera." },
 { text: "Tar du för närvarande några läkemedelsbehandlingar? Om ja, ange vilka, inklusive receptfria läkemedel och kosttillskott." },
 { section: 3, text: "Känner du nervositet, ångest eller överdriven spänning?" },
@@ -796,7 +547,7 @@ window.availableLangsByForm = { DSM: ["Svenska"], Sommeil: [], Psych: [], Neurol
 { section: 13, text: "Har du tankar på att du skulle vara bättre död eller skada dig själv på något sätt?" },
 { section: 14, text: "Hur skulle du bedöma din övergripande sömnkvalitet?" },
 { text: "Har du svårt att somna på kvällen eller att sova kvar under natten?" },
-{ text: "Vaknar du upp känslig förfriskad på morgonen eller fortfarande trött?" },
+{ text: "Vaknar du upp pigg på morgonen eller fortfarande trött?" },
 { text: "Upplever du några störningar under sömnen, såsom mardrömmar, sömngång eller att ofta vakna under natten?" },
 { text: "Använder du någon medicin eller substans för att hjälpa dig att sova?, vilka ?" },
 { text: "Har några livsstilsförändringar eller nyliga händelser påverkat ditt sömnmönster (utbrändhet, olycka...?" },
@@ -847,7 +598,6 @@ window.SCALE_LANG = window.SCALE_LANG || "sv";
 // Étiquettes d’échelle par langue
 // ─────────────────────────────────────────────
 
-
 // ─────────────────────────────────────────────
 // Questions notables (indices 0-based)
 // ─────────────────────────────────────────────
@@ -855,31 +605,21 @@ window.SCALE_LANG = window.SCALE_LANG || "sv";
 // Q30 (29) ajoutée → échelle VERBAL2
 // Q32 (31) reste → échelle VERBAL2
 // Q46 (45) retirée → texte seul
-let notables = [
-  5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,
-  29,       // ✅ Q30 en VERBAL2
-  31,32,    // ✅ Q32 en VERBAL2
-  33,34,35, // Q35/Q36 restent en mixte
-  37,
-  41,42,43,
-  47,48,49
+var notables = [
+  6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,
+  30, 32,33,
+  34,35,36,
+  38,
+  42,43,44,
+  48,49,50
 ];
-
-// Marquage des questions "scale"
+window.NOTABLES_SET = new Set(notables);// Marquage des questions "scale"
 notables.forEach(i => { if (questions[i]) questions[i].type = "scale"; });
-
 // Accès rapide
-
 
 // Tables verbales 1-based → sets 0-based
      // adapte si besoin
   // ✅ Q30/Q32 verbale2
-
-
-
-
-
-
 // ----
 
 
@@ -905,14 +645,14 @@ notables.forEach(i => { if (questions[i]) questions[i].type = "scale"; });
 // standard (aldrig/sällan/ibland/ofta/mycket ofta).
 // Ex.: Q25=24, Q26=25, Q30=29, Q32=31
 // ➜ Pour ajouter d'autres questions plus tard, ajoute simplement leur index :
-const VERBAL_SCALE_QUESTIONS = new Set([24, 25, 29, 31, 36]);
+const VERBAL_SCALE_QUESTIONS = new Set([25, 26, 30, 32, 37]);
 
 // Apply Swedish labels to 1–5 controls for current question
 function __applySwedishLabelsForCurrent(){
   try{
     var q = window.currentQuestion;
     if (typeof q !== "number") return;
-    var isText2 = (q===29 || q===31);
+    var isText2 = (q===30||q===32);
     var labels = isText2 ? ["dålig","rättvis","bra","mycket bra","utmärkt"]
                          : ["inte alls","kanske","lite","ganska mycket","mycket"];
     // Buttons
@@ -1054,7 +794,7 @@ function refreshInstructionBanner(){
   let answers = [];
   let paused = false, recognition = null, listening = false;
   let isValidating = false;
-  let ttsEnabled = true;
+  if (typeof window.ttsEnabled === "undefined") window.ttsEnabled = true;
   let currentLang = "Svenska";
   let justCorrected = false;
   const isMobile = /Android|iPhone|iPad|iPod|SamsungBrowser/i.test(navigator.userAgent);
@@ -1395,7 +1135,7 @@ if (isQuant && !isMixed) {
     // ─── MODIF (GPT): si la question fait partie des échelles verbales, changer le libellé ───
     try{
       if (typeof VERBAL_SCALE_QUESTIONS !== "undefined" && VERBAL_SCALE_QUESTIONS.has(currentQuestion)){
-      txt = (currentQuestion===29||currentQuestion===31) ? "Välj ett betyg 1–5: 1=dålig, 2=rättvis, 3=bra, 4=mycket bra, 5=utmärkt" : "Välj ett betyg 1–5: 1=inte alls, 2=kanske, 3=lite, 4=ganska mycket, 5=mycket";
+      txt = (currentQuestion===30||currentQuestion===32) ? "Välj ett betyg 1–5: 1=dålig, 2=rättvis, 3=bra, 4=mycket bra, 5=utmärkt" : "Välj ett betyg 1–5: 1=inte alls, 2=kanske, 3=lite, 4=ganska mycket, 5=mycket";
       }
     }catch(_){}
     lbl.textContent = txt;
@@ -1456,7 +1196,14 @@ if (f){
   // 🔁 Banderole (RETUR/AVSLUTA / micro on/off) selon la langue
   if (typeof refreshInstructionBanner === "function") refreshInstructionBanner();
   // TTS
-  if (typeof lireTexte === "function") lireTexte(q.text || "");
+  // TTS — lit le texte; si vide et c’est une échelle, lit l’aide 1–5
+var _txt = (q && q.text) ? q.text : "";
+var _isScale = (q && q.type === "scale") || (window.NOTABLES_SET && window.NOTABLES_SET.has(currentQuestion));
+if (!_txt && _isScale){
+  var L = (typeof SCALE_LABELS !== "undefined" && SCALE_LABELS.sv) ? SCALE_LABELS.sv : null;
+  _txt = L ? (L.helpPrefix + " 1–5") : "Välj ett betyg 1–5";
+}
+if (typeof lireTexte === "function") lireTexte(_txt);
 }
     // ❌ Pas d’auto-démarrage micro (évite re-prompts permission)
     // setTimeout(()=>{ if(recognition && !paused && !isMobile){ recognition.start(); listening=true; }},1200);
@@ -1540,7 +1287,7 @@ try{
     setTimeout(()=>{
       if(justCorrected){ isValidating=false; return; }
       currentQuestion = next__;
-      if (currentQuestion < questions.length) showQuestion(); else showSummary();
+      if (currentQuestion < questions.length)  { showQuestion(); try{ var nq=questions[currentQuestion]||{}; var t=nq.text||""; var isScale=(nq.type==="scale")||(window.NOTABLES_SET&&window.NOTABLES_SET.has(currentQuestion)); if(!t&&isScale){ var L=(typeof SCALE_LABELS!=="undefined"&&SCALE_LABELS.sv)?SCALE_LABELS.sv:null; t=L?(L.helpPrefix+" 1–5"):"Välj ett betyg 1–5"; } if(window.ttsEnabled&&typeof lireTexte==="function") lireTexte(t); }catch(_){ } } else showSummary();
     }, tSkip__);
     return;
   }
@@ -1562,7 +1309,7 @@ try{
     setTimeout(()=>{
       if(justCorrected){ isValidating=false; return; }
       currentQuestion = next__;
-      if (currentQuestion < questions.length) showQuestion(); else showSummary();
+      if (currentQuestion < questions.length)  { showQuestion(); try{ var nq=questions[currentQuestion]||{}; var t=nq.text||""; var isScale=(nq.type==="scale")||(window.NOTABLES_SET&&window.NOTABLES_SET.has(currentQuestion)); if(!t&&isScale){ var L=(typeof SCALE_LABELS!=="undefined"&&SCALE_LABELS.sv)?SCALE_LABELS.sv:null; t=L?(L.helpPrefix+" 1–5"):"Välj ett betyg 1–5"; } if(window.ttsEnabled&&typeof lireTexte==="function") lireTexte(t); }catch(_){ } } else showSummary();
     }, tSkip__);
     return;
   }
@@ -1627,7 +1374,7 @@ try{
     setTimeout(()=>{
       if(justCorrected){ isValidating=false; return; }
       currentQuestion = next__;
-      if (currentQuestion < questions.length) showQuestion(); else showSummary();
+      if (currentQuestion < questions.length)  { showQuestion(); try{ var nq=questions[currentQuestion]||{}; var t=nq.text||""; var isScale=(nq.type==="scale")||(window.NOTABLES_SET&&window.NOTABLES_SET.has(currentQuestion)); if(!t&&isScale){ var L=(typeof SCALE_LABELS!=="undefined"&&SCALE_LABELS.sv)?SCALE_LABELS.sv:null; t=L?(L.helpPrefix+" 1–5"):"Välj ett betyg 1–5"; } if(window.ttsEnabled&&typeof lireTexte==="function") lireTexte(t); }catch(_){ } } else showSummary();
     }, tSkip__);
     return;
   }
@@ -1644,7 +1391,7 @@ const tSkip = Math.max(
   config.tempsBaseReponse + r.length*config.tempsParCaractere,
   config.minDelaySkip
 );
-        setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion=next; isValidating=false; if(currentQuestion<questions.length) showQuestion(); else showSummary(); }, tSkip);
+        setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion=next; isValidating=false; if (currentQuestion < questions.length)  { showQuestion(); try{ var nq=questions[currentQuestion]||{}; var t=nq.text||""; var isScale=(nq.type==="scale")||(window.NOTABLES_SET&&window.NOTABLES_SET.has(currentQuestion)); if(!t&&isScale){ var L=(typeof SCALE_LABELS!=="undefined"&&SCALE_LABELS.sv)?SCALE_LABELS.sv:null; t=L?(L.helpPrefix+" 1–5"):"Välj ett betyg 1–5"; } if(window.ttsEnabled&&typeof lireTexte==="function") lireTexte(t); }catch(_){ } } else showSummary(); }, tSkip);
         return;
       }
       // "non" simple -> avancer
@@ -1654,7 +1401,7 @@ const tSkip = Math.max(
      // Temps d'attente apres RETOUR avant de passer a la question suivante pour donner le temps de corriger ici 2000 = 2 sec 
 	//t=Math.max(t,2000);
       t = Math.max(t, config.minDelayNo);
-        setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion++; isValidating=false; if(currentQuestion<questions.length) showQuestion(); else showSummary(); }, t);
+        setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion++; isValidating=false; if (currentQuestion < questions.length)  { showQuestion(); try{ var nq=questions[currentQuestion]||{}; var t=nq.text||""; var isScale=(nq.type==="scale")||(window.NOTABLES_SET&&window.NOTABLES_SET.has(currentQuestion)); if(!t&&isScale){ var L=(typeof SCALE_LABELS!=="undefined"&&SCALE_LABELS.sv)?SCALE_LABELS.sv:null; t=L?(L.helpPrefix+" 1–5"):"Välj ett betyg 1–5"; } if(window.ttsEnabled&&typeof lireTexte==="function") lireTexte(t); }catch(_){ } } else showSummary(); }, t);
         return;
       }
       // Demander score si absent
@@ -1667,7 +1414,7 @@ const tSkip = Math.max(
   // ─── MODIF (GPT): libellé spécial pour les questions à échelle verbale ───
   try{
     if (typeof VERBAL_SCALE_QUESTIONS !== "undefined" && VERBAL_SCALE_QUESTIONS.has(currentQuestion)){
-      txt = (currentQuestion===29||currentQuestion===31) ? "Välj ett betyg 1–5: 1=dålig, 2=rättvis, 3=bra, 4=mycket bra, 5=utmärkt" : "Välj ett betyg 1–5: 1=inte alls, 2=kanske, 3=lite, 4=ganska mycket, 5=mycket";
+      txt = (currentQuestion===30||currentQuestion===32) ? "Välj ett betyg 1–5: 1=dålig, 2=rättvis, 3=bra, 4=mycket bra, 5=utmärkt" : "Välj ett betyg 1–5: 1=inte alls, 2=kanske, 3=lite, 4=ganska mycket, 5=mycket";
     }
   }catch(_){}
   if (lblEl) lblEl.textContent = txt;
@@ -1709,7 +1456,7 @@ document.getElementById("mainErrorMsg").textContent="";
     answers[currentQuestion]=r||"(sans réponse)";
     let t=Math.min(config.tempsBaseReponse + r.length*config.tempsParCaractere, config.tempsMaxReponse);
 t = Math.max(t, config.minDelayDefault);
-    setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion++; isValidating=false; if(currentQuestion<questions.length) showQuestion(); else showSummary(); }, t);
+    setTimeout(()=>{ if(justCorrected){ isValidating=false; return; } currentQuestion++; isValidating=false; if (currentQuestion < questions.length)  { showQuestion(); try{ var nq=questions[currentQuestion]||{}; var t=nq.text||""; var isScale=(nq.type==="scale")||(window.NOTABLES_SET&&window.NOTABLES_SET.has(currentQuestion)); if(!t&&isScale){ var L=(typeof SCALE_LABELS!=="undefined"&&SCALE_LABELS.sv)?SCALE_LABELS.sv:null; t=L?(L.helpPrefix+" 1–5"):"Välj ett betyg 1–5"; } if(window.ttsEnabled&&typeof lireTexte==="function") lireTexte(t); }catch(_){ } } else showSummary(); }, t);
   }
   // ─────────────────────────────────────────────────────────
   // BOUTONS (valider, corriger, pause, export)
@@ -2116,10 +1863,10 @@ document.getElementById('finalScreen').addEventListener('click', () => {
     document.addEventListener("DOMContentLoaded", function(){
       var ttsBtn = document.getElementById("ttsToggleBtn");
       if (!ttsBtn) return;
-      function updateTTSBtn(){ ttsBtn.textContent = ttsEnabled ? M('ttsOn','Vocal') : M('ttsOff','Silence'); }
+      function updateTTSBtn(){ ttsBtn.textContent = window.ttsEnabled ? M('ttsOn','Vocal') : M('ttsOff','Silence'); }
       updateTTSBtn();
       ttsBtn.addEventListener("click", function(){
-        ttsEnabled = !ttsEnabled;
+        window.ttsEnabled = !window.ttsEnabled;
         try { speechSynthesis.cancel(); } catch(_){}
         updateTTSBtn();
       });
@@ -2281,6 +2028,8 @@ document.getElementById('finalScreen').addEventListener('click', () => {
   })();
   </script>
 <!-- === BEGIN: Unavailable label fix (handles (undefined)/language) === -->
+
+
 <script>
 (function(){
   function t(key, fallback){
@@ -2327,8 +2076,12 @@ document.getElementById('finalScreen').addEventListener('click', () => {
     };
   })();
 })();
+
+
 </script>
 <!-- === END: Unavailable label fix === -->
+
+
 <script>
 (function(){
   function renderHomeIntroMinimal(){
@@ -2356,6 +2109,8 @@ document.getElementById('finalScreen').addEventListener('click', () => {
     try{ renderHomeIntroMinimal(); }catch(e){}
   });
 })();
+
+
 </script>
 <!-- HEADER d'accueil : lit la CONFIG + i18n + contrôle langue dispo -->
   <!-- ========== CHARGEUR & NOTABLES ========== -->
@@ -2374,7 +2129,7 @@ document.getElementById('finalScreen').addEventListener('click', () => {
     }
     // Liste d’index notables par formulaire (adaptez à vos tableaux)
     const NOTABLES_BY_FORM = {
-      DSM:         [5,6,7,8,9,10],
+      DSM:         [6,7,8,9,10,11],
       SOMMEIL:     [3,4,5,6],
       NEUROLOGIE:  [2,3,7],
       PSYCHIATRIE: [1,5,6],
@@ -2389,6 +2144,8 @@ document.getElementById('finalScreen').addEventListener('click', () => {
     }
   </script>
   <!-- ========== /CHARGEUR & NOTABLES ========== -->
+
+
 <script id="homeHeader_i18n">
 (function(){
   function setHomeHeaderTitle(){
@@ -2470,6 +2227,8 @@ document.getElementById('finalScreen').addEventListener('click', () => {
     }
   });
 })();
+
+
 </script>
 <script>
 document.addEventListener('DOMContentLoaded', function(){
@@ -2513,8 +2272,12 @@ document.addEventListener('DOMContentLoaded', function(){
     }
   }catch(_){}
 });
+
+
 </script>
 <!-- HARD-STOP language guard: blocks immediately if chosen language is not Svenska -->
+
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
   try{
@@ -2540,6 +2303,8 @@ document.addEventListener('DOMContentLoaded', function(){
     }, true); // <-- CAPTURE
   }catch(_){}
 });
+
+
 </script>
 <script>
 (function(){
@@ -2631,8 +2396,12 @@ document.addEventListener('DOMContentLoaded', function(){
   var obs = new MutationObserver(attach);
   try { obs.observe(document.documentElement, {childList:true, subtree:true}); } catch(_){}
 })();
+
+
 </script>
 <!-- BEGIN NOTABLE_SCORE_GUARD (bleu, effacement après affichage, focus, 1–5, flèches neutralisées) -->
+
+
 <script>
 (function(){
   function getLang(){
@@ -2739,8 +2508,12 @@ document.addEventListener('DOMContentLoaded', function(){
   }
   try { new MutationObserver(attach).observe(document.documentElement,{childList:true,subtree:true}); } catch(_){}
 })();
+
+
 </script>
 <!-- END NOTABLE_SCORE_GUARD -->
+
+
 <script>
 // === Dynamic loader for CodicentJS with fallback & diagnostics ===
 async function loadCodicentJS(){
@@ -2832,6 +2605,8 @@ document.getElementById("sendToCodicentBtn")?.addEventListener('click', async ()
     setTimeout(()=> statusDiv.style.display='none', 8000);
   }
 });
+
+
 </script>
 <script>
 // MODIF ajustement des langues — fin de réponse robuste (STOP/SLUT/SLUTA) sans toucher à tes fonctions
@@ -2896,6 +2671,8 @@ document.getElementById("sendToCodicentBtn")?.addEventListener('click', async ()
     }
   }, 200);
 })();
+
+
 </script>
 <script>
 // MODIF — focus automatique après clic sur TYST/RÖST et MICRO (additif, sans override)
@@ -2932,6 +2709,8 @@ document.getElementById("sendToCodicentBtn")?.addEventListener('click', async ()
     });
   candidates.forEach(attachFocusAfterClick);
 })();
+
+
 </script>
 <script>
 /* ===== TTS — bloc unique (PC / Samsung) ===== */
@@ -3125,6 +2904,8 @@ function lireTexte(txt){
     synth.cancel(); synth.speak(u);
   }catch(_){}
 }
+
+
 </script>
 <script>
 (function(){
@@ -3137,7 +2918,11 @@ function lireTexte(txt){
     _speak(u);
   };
 })();
+
+
 </script>
+
+
 
 <script>
 // === Auto-clear 'not available' error when allowed language is reselected (FR parity) ===
@@ -3163,9 +2948,13 @@ document.addEventListener('DOMContentLoaded', function(){
   // initial check
   clearNotAvailIfAllowed();
 });
+
+
 </script>
 
 <!-- === PATCH: Corriger (2 nivåer) — rensa sedan föregående fråga (forceIndex + robust idx) === -->
+
+
 <script>
 (function(){
   let __corrigerStage = 0;     // 0 = rensa denna, 1 = gå till föregående
@@ -3251,9 +3040,13 @@ document.addEventListener('DOMContentLoaded', function(){
     wireCorriger();
   }
 })();
+
+
 </script>
 
 <!-- OPTION A PATCH: Q34/35/36/38/39/40 => Verbal 1 + MIXTE (Texte → Échelle) -->
+
+
 <script>
 (function(){
   'use strict';
@@ -3342,11 +3135,193 @@ document.addEventListener('DOMContentLoaded', function(){
     setTimeout(runPatch, 0);
   }
 })();
+
+
 </script>
+
+
+
+<script>
+// TTS FIX WRAPPER v1 — non-intrusive add-on (does not modify existing functions)
+(function(){
+  function byId(id){return document.getElementById(id);}
+  function isScaleIndex(idx){
+    try {
+      if (!Number.isFinite(idx)) return false;
+      if (window.questions && window.questions[idx] && window.questions[idx].type==="scale") return true;
+      if (window.NOTABLES_SET && typeof window.NOTABLES_SET.has==="function") return window.NOTABLES_SET.has(idx);
+    } catch(_) {}
+    return false;
+  }
+  function fallbackScaleText(){
+    try{
+      var L = (window.SCALE_LABELS && window.SCALE_LABELS.sv) ? window.SCALE_LABELS.sv : null;
+      return L ? (L.helpPrefix + " 1–5") : "Välj ett betyg 1–5";
+    }catch(_){ return "Välj ett betyg 1–5"; }
+  }
+  function speakCurrent(){
+    try{
+      var idx = window.currentQuestion;
+      if (!Number.isFinite(idx)) return;
+      var q = (window.questions && window.questions[idx]) || {};
+      var t = q.text || "";
+      if (!t && isScaleIndex(idx)) t = fallbackScaleText();
+      if (window.ttsEnabled && typeof window.lireTexte === "function") window.lireTexte(t);
+    }catch(_){}
+  }
+
+  // --- Fix TTS toggle button even if inline onclick is broken/minified ---
+  function updateTTSBtn(){
+    var btn = byId("ttsToggleBtn");
+    if (!btn) return;
+    try{
+      btn.textContent = (window.ttsEnabled ? "Tyst" : "Röst"); // Swedish
+      btn.setAttribute("aria-pressed", !!window.ttsEnabled);
+    }catch(_){}
+  }
+  function attachToggle(){
+    var btn = byId("ttsToggleBtn");
+    if (!btn) return;
+    try{
+      btn.onclick = null; btn.removeAttribute('onclick'); // neutralize inline handler if present/minified
+      btn.addEventListener("click", function(ev){
+        ev.preventDefault(); ev.stopPropagation();
+        window.ttsEnabled = !window.ttsEnabled;
+        try{ localStorage.setItem('tts_on', window.ttsEnabled ? '1' : '0'); }catch(_){}
+        try{ window.speechSynthesis && window.speechSynthesis.cancel && window.speechSynthesis.cancel(); }catch(_){}
+        updateTTSBtn();
+      }, {passive:false});
+      updateTTSBtn();
+    }catch(_){}
+  }
+
+  // --- Speak whenever currentQuestion changes (covers SKIP and normal next) ---
+  var lastIdx = -999;
+  function poll(){
+    try{
+      var main = byId("main");
+      if (main && main.style.display !== "none"){
+        var idx = window.currentQuestion;
+        if (idx !== lastIdx){
+          lastIdx = idx;
+          setTimeout(speakCurrent, 50);
+        }
+      }
+    }catch(_){}
+  }
+
+  // Ensure global flag exists
+  if (typeof window.ttsEnabled !== "boolean") window.ttsEnabled = false;
+
+  document.addEventListener("DOMContentLoaded", function(){
+    attachToggle();
+    updateTTSBtn();
+    setInterval(poll, 200);
+  });
+})();
+</script>
+
+<!-- === TTS FIX WRAPPER v2 (non-intrusif) === -->
+<script>
+(function(){
+  // --- Persistence TTS (lis état mémorisé, sinon conserve valeur existante) ---
+  try{
+    var st = localStorage.getItem('tts_on');
+    if (st === '1') { window.ttsEnabled = true; }
+    else if (st === '0') { window.ttsEnabled = false; }
+    else if (typeof window.ttsEnabled !== "boolean") { window.ttsEnabled = false; }
+  } catch(_){ if (typeof window.ttsEnabled !== "boolean") window.ttsEnabled = false; }
+
+  // --- Helper: détection "échelle" sans texte ---
+  function isScaleIndex(idx){
+    try{
+      var q = (window.questions && window.questions[idx]) || {};
+      if (q && q.type === "scale") return true;
+      if (window.NOTABLES_SET && window.NOTABLES_SET.has(idx)) return true;
+    }catch(_){}
+    return false;
+  }
+  function fallbackScaleText(){
+    try{
+      var L = (typeof window.SCALE_LABELS !== "undefined" && window.SCALE_LABELS.sv) ? window.SCALE_LABELS.sv : null;
+      return L ? (L.helpPrefix + " 1–5") : "Välj ett betyg 1–5";
+    }catch(_){}
+    return "Välj ett betyg 1–5";
+  }
+  function speakCurrent(){
+    try{
+      if (!window.ttsEnabled) return;
+      var idx = window.currentQuestion;
+      if (!Number.isFinite(idx)) return;
+      var q = (window.questions && window.questions[idx]) || {};
+      var t = q && q.text ? q.text : "";
+      if (!t && isScaleIndex(idx)) t = fallbackScaleText();
+
+      if (typeof window.lireTexte === "function"){
+        window.lireTexte(t);
+      } else {
+        // Fallback direct via Web Speech
+        try{
+          if (!("speechSynthesis" in window)) return;
+          window.speechSynthesis.cancel();
+          var u = new SpeechSynthesisUtterance(t);
+          // Choix d'une voix sv-SE si dispo
+          var vs = window.speechSynthesis.getVoices();
+          var sv = (vs||[]).find(function(v){ return /sv-SE/i.test(v.lang||""); });
+          if (sv) u.voice = sv;
+          window.speechSynthesis.speak(u);
+        }catch(_){}
+      }
+    }catch(_){}
+  }
+
+  // --- Wrap showQuestion(): après l'appel d'origine, relancer la voix ---
+  try{
+    if (typeof window.showQuestion === "function" && !window.__showQuestionWrapped){
+      window.__origShowQuestion = window.showQuestion;
+      window.showQuestion = function(){
+        try{ return window.__origShowQuestion.apply(this, arguments); }
+        finally { speakCurrent(); }
+      };
+      window.__showQuestionWrapped = true;
+    }
+  }catch(_){}
+
+  // --- Bouton RÖST/TYST : neutralise l'onclick inline et rattache notre toggle persistant ---
+  function updateTTSBtn(){
+    try{
+      var b = document.getElementById("ttsToggleBtn");
+      if (!b) return;
+      var m = (window.messagesInterface && window.messagesInterface[window.currentLang]) || null;
+      var labelOn  = m ? (m.ttsOn  || "Röst")  : "Röst";
+      var labelOff = m ? (m.ttsOff || "Tyst") : "Tyst";
+      b.textContent = window.ttsEnabled ? labelOn : labelOff;
+      b.setAttribute("aria-pressed", window.ttsEnabled ? "true" : "false");
+    }catch(_){}
+  }
+  function attachToggle(){
+    var b = document.getElementById("ttsToggleBtn");
+    if (!b) return;
+    try{ b.onclick = null; b.removeAttribute("onclick"); }catch(_){}
+    b.addEventListener("click", function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      window.ttsEnabled = !window.ttsEnabled;
+      try{ localStorage.setItem("tts_on", window.ttsEnabled ? "1" : "0"); }catch(_){}
+      // si on vient d'activer, lire tout de suite
+      if (window.ttsEnabled) speakCurrent();
+      else { try{ window.speechSynthesis && window.speechSynthesis.cancel(); }catch(_){} }
+      updateTTSBtn();
+    }, {passive:false});
+    updateTTSBtn();
+  }
+
+  document.addEventListener("DOMContentLoaded", function(){
+    attachToggle();
+    updateTTSBtn();
+  });
+})();
+</script>
+<!-- === /TTS FIX WRAPPER v2 === -->
 
 </body>
 </html>
-
-
-
-
